@@ -89,6 +89,12 @@ async function handleMessage(msg) {
     case 'GET_DESIGN_REF':    return getDesignRef();
     case 'SAVE_DESIGN_REF':   return saveDesignRef(msg.dataUrl);
     case 'CLEAR_DESIGN_REF':  return clearDesignRef();
+    case 'GET_CSS_CHARS': {
+      const custTab = await findCustomizerTab();
+      if (!custTab) return { chars: 0 };
+      const css = await readCssFromTab(custTab.id);
+      return { chars: css ? css.length : 0 };
+    }
     default: throw new Error('Unknown message type: ' + msg.type);
   }
 }
@@ -263,85 +269,99 @@ function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, designRe
 
 // ─── Chat Streaming ───────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT_CHAT = `You are a CSS assistant embedded in a WordPress styling tool. You have access to the live page DOM. Answer directly and briefly — no lists of suggestions, no asking the user to paste HTML, no emojis. If you can see the DOM, use it. If a selector isn't obvious, look for it in the DOM context provided. When writing CSS, use code blocks.`;
+const SYSTEM_PROMPT_CHAT = `You are a CSS assistant embedded in a WordPress styling tool. Answer directly and briefly — no lists of suggestions, no asking the user to paste HTML, no emojis. When page context or CSS is provided in the conversation, use it. When writing CSS, use code blocks.`;
 
 async function streamChatMessage(msg, port) {
-  const { message, history, siteTabId } = msg;
+  const { message, history, siteTabId, includeDom = false, includeExistingCss = false } = msg;
   const settings = await getSettings();
 
-  // Find the best tab for DOM context.
-  // Priority: locked site tab → same-origin non-admin tab → nothing (don't guess).
-  let domTabId = null;
-  let domNote = '';
-  try {
-    if (!siteTabId) {
-      domNote = 'No site tab locked. User should take a screenshot on the Agent tab first.';
-    } else {
-      const tab = await chrome.tabs.get(siteTabId);
-      if (!tab.url.includes('wp-admin')) {
-        domTabId = siteTabId;
+  // ── Inject context once into this message ────────────────────────────────────
+  const contextParts = [];
+  const noteParts = [];
+
+  if (includeDom) {
+    let domTabId = null;
+    let domNote = '';
+    try {
+      if (!siteTabId) {
+        domNote = 'no site tab locked';
       } else {
-        // Customizer tab — find a non-admin tab with the same origin
-        const origin = new URL(tab.url).origin;
-        const all = await chrome.tabs.query({});
-        const candidate = all.find(t =>
-          t.url && t.url.startsWith(origin) && !t.url.includes('wp-admin')
-        );
-        if (candidate) {
-          domTabId = candidate.id;
+        const tab = await chrome.tabs.get(siteTabId);
+        if (!tab.url.includes('wp-admin')) {
+          domTabId = siteTabId;
         } else {
-          domNote = 'Site tab is the Customizer and no matching site tab is open.';
+          const origin = new URL(tab.url).origin;
+          const all = await chrome.tabs.query({});
+          const candidate = all.find(t =>
+            t.url && t.url.startsWith(origin) && !t.url.includes('wp-admin')
+          );
+          if (candidate) domTabId = candidate.id;
+          else domNote = 'no matching site tab';
         }
       }
+    } catch (_) {
+      domNote = 'could not access tab';
     }
-  } catch (_) {
-    domNote = 'Could not access the locked tab.';
+
+    if (domTabId) {
+      try {
+        const [r] = await chrome.scripting.executeScript({
+          target: { tabId: domTabId },
+          world: 'ISOLATED',
+          func: () => {
+            const nodes = [];
+            function walk(el, depth) {
+              if (!el || nodes.length >= 200 || depth > 6) return;
+              if (el.nodeType !== Node.ELEMENT_NODE) return;
+              nodes.push({ tag: el.tagName.toLowerCase(), id: el.id || '', classes: Array.from(el.classList).slice(0, 6), depth });
+              for (const child of el.children) walk(child, depth + 1);
+            }
+            walk(document.body, 0);
+            return nodes;
+          },
+        });
+        if (r?.result) {
+          contextParts.push(`Current page DOM:\n${JSON.stringify(r.result)}`);
+          noteParts.push(`DOM (${r.result.length} nodes)`);
+        }
+      } catch (_) {
+        noteParts.push('DOM (failed)');
+      }
+    } else {
+      noteParts.push(`DOM (unavailable — ${domNote})`);
+    }
   }
 
-  let domContext = '';
-  let chatDomDebug = '';
-  if (domNote) {
-    domContext = `\n\nDOM context unavailable: ${domNote}`;
-    chatDomDebug = `DOM: unavailable — ${domNote}`;
-  }
-  if (domTabId) {
+  if (includeExistingCss) {
     try {
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId: domTabId },
-        world: 'ISOLATED',
-        func: () => {
-          const nodes = [];
-          function walk(el, depth) {
-            if (!el || nodes.length >= 200 || depth > 6) return;
-            if (el.nodeType !== Node.ELEMENT_NODE) return;
-            nodes.push({ tag: el.tagName.toLowerCase(), id: el.id || '', classes: Array.from(el.classList).slice(0, 6), depth });
-            for (const child of el.children) walk(child, depth + 1);
-          }
-          walk(document.body, 0);
-          return nodes;
-        },
-      });
-      if (r.result) {
-        domContext = `\n\nCurrent page DOM:\n${JSON.stringify(r.result)}`;
-        chatDomDebug = `DOM: ${r.result.length} nodes from tab ${domTabId}`;
+      const custTab = await findCustomizerTab();
+      if (custTab) {
+        const css = await readCssFromTab(custTab.id);
+        contextParts.push(`Existing Additional CSS:\n${css || '(empty)'}`);
+        noteParts.push(`CSS (${css ? css.length + ' chars' : 'empty'})`);
       } else {
-        chatDomDebug = `DOM: executeScript returned null for tab ${domTabId}`;
+        noteParts.push('CSS (Customizer tab not found)');
       }
     } catch (e) {
-      domContext = '\n\nDOM context unavailable: executeScript failed on the site tab.';
-      chatDomDebug = `DOM: executeScript failed — ${e.message}`;
+      noteParts.push(`CSS (failed — ${e.message})`);
     }
   }
-  port.postMessage({ type: 'CHAT_DEBUG', text: chatDomDebug });
 
-  const systemPrompt = SYSTEM_PROMPT_CHAT + domContext;
-  const messages = [...(history || []), { role: 'user', content: message }];
+  if (noteParts.length) {
+    port.postMessage({ type: 'CHAT_CONTEXT_INJECTED', note: noteParts.join(' + ') });
+  }
+
+  const fullMessage = contextParts.length
+    ? contextParts.join('\n\n') + '\n\n---\n\n' + message
+    : message;
+
+  const messages = [...(history || []), { role: 'user', content: fullMessage }];
 
   let fullText = '';
   if (settings.aiBackend === 'ollama') {
-    fullText = await streamOllama(settings, messages, port, { systemPrompt, chunkType: 'CHAT_CHUNK' });
+    fullText = await streamOllama(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
   } else {
-    fullText = await streamClaude(settings, messages, port, { systemPrompt, chunkType: 'CHAT_CHUNK' });
+    fullText = await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
   }
 
   const updatedHistory = [...messages, { role: 'assistant', content: fullText }];
@@ -446,6 +466,14 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
 
   if (!resp.ok) {
     const errText = await resp.text();
+    if (resp.status === 403) {
+      throw new Error(
+        `Ollama returned 403 Forbidden — this is a CORS/origins issue.\n\n` +
+        `Restart Ollama with:\n\n` +
+        `  OLLAMA_ORIGINS=* ollama serve\n\n` +
+        `On Windows, set OLLAMA_ORIGINS=* in System Settings → Environment Variables, then restart Ollama.`
+      );
+    }
     throw new Error(`Ollama error ${resp.status}: ${errText}`);
   }
 
