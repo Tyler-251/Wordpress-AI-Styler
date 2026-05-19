@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sync Styler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+
+  <!-- Design Reference Strip (always visible above tabs) -->
+  <div class="design-ref-strip" id="designRefStrip">
+
+    <div class="design-ref-empty" id="designRefEmpty">
+      <svg class="design-ref-icon" viewBox="0 0 16 16" fill="none">
+        <rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/>
+        <circle cx="5.5" cy="6.5" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M1 10.5l3.5-3 3 2.5 2.5-2.5L15 11" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+      </svg>
+      <span class="design-ref-label">Drop a design reference here</span>
+      <button class="design-ref-browse" id="designRefBrowse">Browse</button>
+    </div>
+
+    <div class="design-ref-filled hidden" id="designRefFilled">
+      <img class="design-ref-thumb" id="designRefThumb" alt="Design reference">
+      <span class="design-ref-name" id="designRefName">Design Reference</span>
+      <div class="design-ref-actions">
+        <button class="icon-btn" id="designRefCollapse" title="Collapse">
+          <svg viewBox="0 0 12 12"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-btn" id="designRefClear" title="Remove">
+          <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="design-ref-bar hidden" id="designRefBar">
+      <img class="design-ref-thumb-mini" id="designRefThumbMini" alt="">
+      <span class="design-ref-name-mini">Design Reference</span>
+      <div class="design-ref-actions">
+        <button class="icon-btn" id="designRefExpand" title="Expand">
+          <svg viewBox="0 0 12 12"><path d="M2 8l4-4 4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-btn" id="designRefClearBar" title="Remove">
+          <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <input type="file" id="designRefInput" accept="image/*" class="visually-hidden">
+  </div>
+
+  <!-- Main Bar: tabs + settings -->
+  <div class="main-bar">
+    <div class="main-tabs">
+      <button class="main-tab active" data-panel="agent">Agent</button>
+      <button class="main-tab" data-panel="helper">Helper</button>
+    </div>
+    <button class="icon-btn" id="openSettings" title="Settings">
+      <svg viewBox="0 0 16 16" fill="none">
+        <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.42 1.42M11.53 11.53l1.42 1.42M3.05 12.95l1.42-1.42M11.53 4.47l1.42-1.42" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ─── Agent Panel ─── -->
+  <div class="workflow-panel" id="workflowPanel">
+
+    <div class="section">
+      <div class="section-header">
+        <span class="section-label">Screenshot</span>
+      </div>
+      <button class="btn-secondary full-width" id="takeScreenshot">Take Screenshot</button>
+      <div class="screenshot-preview" id="screenshotPreview">
+        <div class="screenshot-empty" id="screenshotEmpty">No screenshot yet</div>
+        <div class="hidden" id="screenshotFilled">
+          <img id="screenshotImg" class="screenshot-img" alt="Screenshot">
+          <span class="screenshot-time" id="screenshotTime"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section">
+      <div class="section-header">
+        <span class="section-label">Instructions</span>
+        <div class="scope-toggle" id="scopeToggle">
+          <button class="scope-btn active" data-scope="all">ALL</button>
+          <button class="scope-btn" data-scope="1">1</button>
+          <button class="scope-btn" data-scope="2">2</button>
+          <button class="scope-btn" data-scope="3">3</button>
+          <button class="scope-btn" data-scope="4">4</button>
+          <button class="scope-btn" data-scope="5">5</button>
+        </div>
+      </div>
+      <textarea id="instructions" class="textarea" rows="4" placeholder="Describe the style change you want..."></textarea>
+      <button class="btn-primary full-width" id="generateCss">Generate CSS</button>
+      <button class="btn-secondary full-width" id="reconsolidate">Reconsolidate CSS</button>
+    </div>
+
+    <div class="divider" id="generatedDivider" style="display:none"></div>
+
+    <!-- Generated CSS section — hidden until response -->
+    <div class="section hidden" id="generatedSection">
+      <div class="section-header">
+        <span class="section-label">Generated CSS</span>
+      </div>
+      <div class="debug-note hidden" id="cssDebugNote"></div>
+      <pre class="css-block" id="cssBlock"></pre>
+      <div class="diff-stat hidden" id="diffStat"></div>
+      <div class="action-row">
+        <button class="btn-primary" id="applyChanges">Apply Changes</button>
+        <label class="checkbox-row" title="Append !important to every declaration before applying">
+          <input type="checkbox" id="forceImportant">
+          <span>!important</span>
+        </label>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="section-header">
+        <span class="section-label">Request a Revision</span>
+      </div>
+      <textarea id="revisionInput" class="textarea" rows="3" placeholder='e.g. "Make the font slightly smaller" or "The contrast is off"'></textarea>
+      <button class="btn-secondary" id="revise">Revise</button>
+    </div>
+
+    <div class="error-box hidden" id="errorBox"></div>
+
+  </div>
+
+  <!-- ─── Helper Panel ─── -->
+  <div class="helper-panel hidden" id="helperPanel">
+    <div class="chat-messages" id="chatMessages"></div>
+    <div class="chat-input-area">
+      <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask anything about the page…"></textarea>
+      <button class="chat-send" id="chatSend">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── Settings Panel (overlay) ─── -->
+  <div class="settings-panel hidden" id="settingsPanel">
+
+    <div class="settings-header">
+      <span class="settings-title">Settings</span>
+      <button class="icon-btn" id="closeSettings" title="Close">
+        <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="settings-body">
+
+      <p class="settings-section-label">AI Backend</p>
+
+      <div class="field-group">
+        <div class="toggle-pill" id="backendToggle">
+          <button class="toggle-opt active" data-value="claude">Claude</button>
+          <button class="toggle-opt" data-value="ollama">Ollama</button>
+        </div>
+      </div>
+
+      <div id="claudeConfig">
+        <div class="field-group">
+          <label class="field-label" for="claudeApiKey">API Key</label>
+          <input type="password" id="claudeApiKey" class="input" placeholder="sk-ant-...">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="claudeModel">Model</label>
+          <input type="text" id="claudeModel" class="input" placeholder="claude-sonnet-4-6">
+        </div>
+      </div>
+
+      <div id="ollamaConfig" class="hidden">
+        <div class="field-group">
+          <label class="field-label" for="ollamaUrl">Server URL</label>
+          <input type="text" id="ollamaUrl" class="input" placeholder="http://localhost:11434">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="ollamaModel">Text Model</label>
+          <input type="text" id="ollamaModel" class="input" placeholder="llama3">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="ollamaVisionModel">Vision Model</label>
+          <input type="text" id="ollamaVisionModel" class="input" placeholder="llava">
+          <span class="field-hint">Used when a screenshot is attached</span>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">CSS Edit Mode</label>
+        <div class="toggle-pill" id="cssModeToggle">
+          <button class="toggle-opt active" data-value="full">Full Rewrite</button>
+          <button class="toggle-opt" data-value="patch">Patch</button>
+        </div>
+        <span class="field-hint">Full Rewrite: returns the entire file on every generation — slower, more tokens, supports adds/edits/deletes. Patch: returns only changed rules — faster, fewer tokens, no deletes (use Reconsolidate to clean up).</span>
+      </div>
+
+      <div class="field-group">
+        <label class="checkbox-row">
+          <input type="checkbox" id="autoPublish">
+          <span>Auto-publish after applying CSS</span>
+        </label>
+      </div>
+
+      <div class="settings-save-row">
+        <button class="btn-primary" id="saveSettings">Save Settings</button>
+        <span class="save-confirm hidden" id="saveConfirm">Saved ✓</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <p class="settings-section-label">
+        <span id="backupsCount">Backups (0)</span>
+        <button class="btn-text-danger" id="clearBackups">Clear All</button>
+      </p>
+
+      <div class="backups-list" id="backupsList">
+        <div class="backups-empty">No backups yet.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Tab mismatch overlay — shown when user switches away from the associated tab -->
+  <div class="tab-mismatch-overlay hidden" id="tabMismatchOverlay">
+    <div class="tab-mismatch-content">
+      <svg viewBox="0 0 24 24" fill="none" class="tab-mismatch-icon">
+        <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M2 8h20" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M6 6h.01M9 6h.01M12 6h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <p class="tab-mismatch-title">Wrong Tab</p>
+      <p class="tab-mismatch-desc" id="tabMismatchDesc">Switch back to your site tab to continue.</p>
+      <button class="btn-primary" id="tabMismatchSwitch">Switch to Site Tab</button>
+      <button class="btn-text-muted" id="tabMismatchReset">Use This Tab Instead</button>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

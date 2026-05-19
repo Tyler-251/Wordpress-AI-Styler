@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Sync Styler",
+  "version": "1.0.0",
+  "description": "AI-powered WordPress CSS styling assistant for Sync",
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "sidePanel"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open Sync Styler"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*/wp-admin/customize.php*"],
+      "js": ["content-customizer.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
