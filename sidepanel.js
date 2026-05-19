@@ -15,6 +15,7 @@ const state = {
   chatHistory: [],
   siteTabId: null,      // tab this panel is locked to
   siteTabTitle: null,
+  cssContextChars: null, // cached char count of current WP CSS, null = unknown
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -67,6 +68,7 @@ function setupHelper() {
   input.addEventListener('input', () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    updateTokenCounter();
   });
 
   input.addEventListener('keydown', e => {
@@ -76,7 +78,62 @@ function setupHelper() {
     }
   });
 
+  document.getElementById('chatIncludeDom').addEventListener('change', updateTokenCounter);
+  document.getElementById('chatIncludeCss').addEventListener('change', async e => {
+    if (e.target.checked) {
+      state.cssContextChars = null;
+      updateTokenCounter();
+      try {
+        const resp = await send({ type: 'GET_CSS_CHARS' });
+        state.cssContextChars = resp.chars ?? 0;
+      } catch (_) {
+        state.cssContextChars = 0;
+      }
+    } else {
+      state.cssContextChars = null;
+    }
+    updateTokenCounter();
+  });
+
   sendBtn.addEventListener('click', handleChatSend);
+  updateTokenCounter();
+}
+
+function updateTokenCounter() {
+  const el = document.getElementById('chatTokenCount');
+  if (!el) return;
+  let chars = 0;
+  for (const m of state.chatHistory) {
+    const c = m.content;
+    chars += typeof c === 'string' ? c.length : JSON.stringify(c).length;
+  }
+  chars += document.getElementById('chatInput').value.length;
+
+  // Add context injection estimates when toggles are on
+  if (document.getElementById('chatIncludeDom').checked) {
+    chars += 12000; // ~200 nodes × 60 chars each
+  }
+  if (document.getElementById('chatIncludeCss').checked) {
+    // Use fetched size if available, otherwise show a pending marker
+    if (state.cssContextChars === null) {
+      el.textContent = '~… tokens';
+      return;
+    }
+    chars += state.cssContextChars;
+  }
+
+  const tokens = Math.ceil(chars / 4);
+  const display = tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : String(tokens);
+  el.textContent = `~${display} tokens`;
+}
+
+function appendChatMemo(text) {
+  const el = document.createElement('div');
+  el.className = 'chat-memo';
+  el.textContent = text;
+  document.getElementById('chatMessages').appendChild(el);
+  el.scrollIntoView({ block: 'end' });
+  return el;
 }
 
 async function handleChatSend() {
@@ -89,6 +146,14 @@ async function handleChatSend() {
   input.style.height = 'auto';
   sendBtn.disabled = true;
 
+  const domToggle = document.getElementById('chatIncludeDom');
+  const cssToggle = document.getElementById('chatIncludeCss');
+  const includeDom = domToggle.checked;
+  const includeExistingCss = cssToggle.checked;
+  domToggle.checked = false;
+  cssToggle.checked = false;
+  updateTokenCounter();
+
   appendChatMessage('user', text);
 
   const assistantEl = appendChatMessage('assistant', '');
@@ -99,7 +164,11 @@ async function handleChatSend() {
   const port = chrome.runtime.connect({ name: 'chat' });
 
   port.onMessage.addListener(msg => {
-    if (msg.type === 'CHAT_DEBUG') {
+    if (msg.type === 'CHAT_CONTEXT_INJECTED') {
+      const memo = appendChatMemo(`↳ context injected: ${msg.note}`);
+      assistantEl.before(memo);
+
+    } else if (msg.type === 'CHAT_DEBUG') {
       const note = document.createElement('div');
       note.className = 'debug-note';
       note.textContent = msg.text;
@@ -119,6 +188,7 @@ async function handleChatSend() {
       assistantEl.classList.remove('streaming');
       state.chatHistory = msg.history;
       sendBtn.disabled = false;
+      updateTokenCounter();
     } else if (msg.type === 'CHAT_ERROR') {
       assistantEl.textContent = `Error: ${msg.error}`;
       assistantEl.classList.remove('streaming');
@@ -137,6 +207,8 @@ async function handleChatSend() {
     message: text,
     history: state.chatHistory,
     siteTabId: state.siteTabId ?? null,
+    includeDom,
+    includeExistingCss,
   });
 }
 

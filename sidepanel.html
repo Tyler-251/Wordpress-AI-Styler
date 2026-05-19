@@ -55,8 +55,8 @@
   <!-- Main Bar: tabs + settings -->
   <div class="main-bar">
     <div class="main-tabs">
-      <button class="main-tab active" data-panel="agent">Agent</button>
-      <button class="main-tab" data-panel="helper">Helper</button>
+      <button class="main-tab active" data-panel="helper">Helper</button>
+      <button class="main-tab" data-panel="agent">Agent ⚠️</button>
     </div>
     <button class="icon-btn" id="openSettings" title="Settings">
       <svg viewBox="0 0 16 16" fill="none">
@@ -67,7 +67,7 @@
   </div>
 
   <!-- ─── Agent Panel ─── -->
-  <div class="workflow-panel" id="workflowPanel">
+  <div class="workflow-panel hidden" id="workflowPanel">
 
     <div class="section">
       <div class="section-header">
@@ -134,13 +134,28 @@
   </div>
 
   <!-- ─── Helper Panel ─── -->
-  <div class="helper-panel hidden" id="helperPanel">
+  <div class="helper-panel" id="helperPanel">
     <div class="chat-messages" id="chatMessages"></div>
     <div class="chat-input-area">
-      <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask anything about the page…"></textarea>
-      <button class="chat-send" id="chatSend">
-        <svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+      <div class="chat-context-toggles">
+        <label class="ctx-toggle">
+          <input type="checkbox" id="chatIncludeDom">
+          <span class="ctx-toggle-track"></span>
+          <span class="ctx-toggle-lbl">DOM context</span>
+        </label>
+        <label class="ctx-toggle">
+          <input type="checkbox" id="chatIncludeCss">
+          <span class="ctx-toggle-track"></span>
+          <span class="ctx-toggle-lbl">Existing CSS</span>
+        </label>
+        <span class="chat-token-count" id="chatTokenCount"></span>
+      </div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask anything about the page…"></textarea>
+        <button class="chat-send" id="chatSend">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
     </div>
   </div>
 

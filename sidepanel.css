@@ -196,11 +196,18 @@ body {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
   margin-bottom: -1px;
 }
-.main-tab:hover { color: var(--text-primary); }
-.main-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.main-tab:hover:not(.active) {
+  color: var(--text-primary);
+  border-bottom-color: var(--border);
+}
+.main-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-bottom-color: var(--accent);
+}
 
 /* ─── Workflow Panel ─────────────────────────────────────────────────────────── */
 
@@ -285,11 +292,90 @@ body {
 .chat-input-area {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-base);
+}
+
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.chat-context-toggles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ctx-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ctx-toggle input[type="checkbox"] { display: none; }
+
+.ctx-toggle-track {
+  width: 28px;
+  height: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ctx-toggle-track::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  top: 2px;
+  left: 2px;
+  transition: transform 0.15s, background 0.15s;
+}
+
+.ctx-toggle input:checked + .ctx-toggle-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ctx-toggle input:checked + .ctx-toggle-track::after {
+  background: #fff;
+  transform: translateX(12px);
+}
+
+.ctx-toggle:hover .ctx-toggle-track { border-color: var(--accent); }
+
+.ctx-toggle-lbl {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-token-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-memo {
+  align-self: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 3px 10px;
 }
 
 .chat-input {
