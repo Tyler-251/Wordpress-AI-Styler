@@ -89,6 +89,22 @@ async function handleMessage(msg) {
     case 'GET_DESIGN_REF':    return getDesignRef();
     case 'SAVE_DESIGN_REF':   return saveDesignRef(msg.dataUrl);
     case 'CLEAR_DESIGN_REF':  return clearDesignRef();
+    case 'TEST_OLLAMA': {
+      const headers = { 'Content-Type': 'application/json' };
+      if (msg.cfClientId && msg.cfClientSecret) {
+        headers['CF-Access-Client-Id'] = msg.cfClientId;
+        headers['CF-Access-Client-Secret'] = msg.cfClientSecret;
+      }
+      let testResp;
+      try {
+        testResp = await fetch(msg.url, { headers });
+      } catch (e) {
+        throw new Error(`Could not reach ${msg.url} — ${e.message}`);
+      }
+      if (!testResp.ok) throw new Error(`Server returned ${testResp.status}`);
+      const text = await testResp.text();
+      return { message: text.trim() || 'Connected' };
+    }
     case 'GET_CSS_CHARS': {
       const custTab = await findCustomizerTab();
       if (!custTab) return { chars: 0 };
@@ -448,11 +464,17 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
     }),
   ];
 
+  const ollamaHeaders = { 'Content-Type': 'application/json' };
+  if (settings.cfClientId && settings.cfClientSecret) {
+    ollamaHeaders['CF-Access-Client-Id'] = settings.cfClientId;
+    ollamaHeaders['CF-Access-Client-Secret'] = settings.cfClientSecret;
+  }
+
   let resp;
   try {
     resp = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: ollamaHeaders,
       body: JSON.stringify({ model, messages: ollamaMessages, stream: true, options: { num_ctx: 32768 } }),
     });
   } catch (e) {
@@ -764,6 +786,8 @@ const DEFAULT_SETTINGS = {
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: 'llama3',
   ollamaVisionModel: 'llava',
+  cfClientId: '',
+  cfClientSecret: '',
   autoPublish: false,
   maxRollbacks: 20,
   cssMode: 'full',

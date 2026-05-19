@@ -367,6 +367,8 @@ function applySettingsToForm(s) {
   document.getElementById('ollamaUrl').value = s.ollamaUrl || 'http://localhost:11434';
   document.getElementById('ollamaModel').value = s.ollamaModel || 'llama3';
   document.getElementById('ollamaVisionModel').value = s.ollamaVisionModel || 'llava';
+  document.getElementById('cfClientId').value = s.cfClientId || '';
+  document.getElementById('cfClientSecret').value = s.cfClientSecret || '';
   document.getElementById('autoPublish').checked = !!s.autoPublish;
   setBackend(s.aiBackend || 'claude');
   setCssMode(s.cssMode || 'full');
@@ -391,6 +393,32 @@ function setupSetupTab() {
     btn.addEventListener('click', () => setBackend(btn.dataset.value));
   });
 
+  document.getElementById('testOllama').addEventListener('click', async () => {
+    const btn = document.getElementById('testOllama');
+    const status = document.getElementById('ollamaTestStatus');
+    btn.disabled = true;
+    btn.textContent = 'Testing…';
+    status.className = 'ollama-test-status';
+    status.textContent = '';
+    try {
+      const result = await send({
+        type: 'TEST_OLLAMA',
+        url: document.getElementById('ollamaUrl').value.trim() || 'http://localhost:11434',
+        cfClientId: document.getElementById('cfClientId').value.trim(),
+        cfClientSecret: document.getElementById('cfClientSecret').value.trim(),
+      });
+      status.textContent = `✓ ${result.message}`;
+      status.classList.add('test-ok');
+    } catch (e) {
+      status.textContent = `✗ ${e.message}`;
+      status.classList.add('test-fail');
+    } finally {
+      status.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = 'Test Connection';
+    }
+  });
+
   document.querySelectorAll('#cssModeToggle .toggle-opt').forEach(btn => {
     btn.addEventListener('click', () => setCssMode(btn.dataset.value));
   });
@@ -405,6 +433,8 @@ function setupSetupTab() {
       ollamaUrl: document.getElementById('ollamaUrl').value.trim() || 'http://localhost:11434',
       ollamaModel: document.getElementById('ollamaModel').value.trim() || 'llama3',
       ollamaVisionModel: document.getElementById('ollamaVisionModel').value.trim() || 'llava',
+      cfClientId: document.getElementById('cfClientId').value.trim(),
+      cfClientSecret: document.getElementById('cfClientSecret').value.trim(),
       autoPublish: document.getElementById('autoPublish').checked,
       maxRollbacks: 20,
       cssMode,

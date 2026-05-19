@@ -514,6 +514,21 @@ body {
   opacity: 0.7;
 }
 
+.field-hint-inline {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  font-weight: 400;
+}
+
+.ollama-test-status {
+  font-size: 12px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.ollama-test-status.test-ok   { color: #4ade80; }
+.ollama-test-status.test-fail { color: var(--danger); }
+
 .input {
   width: 100%;
   padding: 9px 12px;

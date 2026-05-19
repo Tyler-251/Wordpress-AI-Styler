@@ -205,6 +205,19 @@
           <input type="text" id="ollamaVisionModel" class="input" placeholder="llava">
           <span class="field-hint">Used when a screenshot is attached</span>
         </div>
+        <div class="field-group">
+          <label class="field-label" for="cfClientId">CF Access Client ID <span class="field-hint-inline">(optional)</span></label>
+          <input type="text" id="cfClientId" class="input" placeholder="xxxxxxxx.access">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="cfClientSecret">CF Access Client Secret <span class="field-hint-inline">(optional)</span></label>
+          <input type="password" id="cfClientSecret" class="input" placeholder="Leave blank for localhost">
+          <span class="field-hint">Required when Ollama is behind Cloudflare Access</span>
+        </div>
+        <div class="field-group">
+          <button class="btn-secondary" id="testOllama">Test Connection</button>
+          <span class="ollama-test-status hidden" id="ollamaTestStatus"></span>
+        </div>
       </div>
 
       <div class="field-group">
