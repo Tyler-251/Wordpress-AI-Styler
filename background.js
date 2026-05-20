@@ -121,11 +121,14 @@ async function handleMessage(msg) {
 
 chrome.runtime.onConnect.addListener(port => {
   if (port.name === 'generate') {
+    const controller = new AbortController();
+    port.onDisconnect.addListener(() => controller.abort());
     port.onMessage.addListener(async msg => {
       if (msg.type !== 'GENERATE_CSS') return;
       try {
-        await generateCssStreaming(msg, port);
+        await generateCssStreaming(msg, port, controller.signal);
       } catch (err) {
+        if (err.name === 'AbortError') return;
         console.error('[SyncStyler stream]', err);
         try { port.postMessage({ type: 'CSS_ERROR', error: err.message }); } catch (_) {}
       }
@@ -144,7 +147,7 @@ chrome.runtime.onConnect.addListener(port => {
   }
 });
 
-async function generateCssStreaming(msg, port) {
+async function generateCssStreaming(msg, port, signal) {
   const { instructions, baseCss, screenshotDataUrl, designRefDataUrl, history, stepScope, siteTabId } = msg;
   const settings = await getSettings();
 
@@ -211,9 +214,9 @@ async function generateCssStreaming(msg, port) {
   // Stream
   let fullText = '';
   if (backend === 'ollama') {
-    fullText = await streamOllama(settings, messages, port, { systemPrompt });
+    fullText = await streamOllama(settings, messages, port, { systemPrompt, signal });
   } else {
-    fullText = await streamClaude(settings, messages, port, { systemPrompt });
+    fullText = await streamClaude(settings, messages, port, { systemPrompt, signal });
   }
 
   // If the model didn't wrap its output in <css> tags, nudge it and retry once
@@ -225,9 +228,9 @@ async function generateCssStreaming(msg, port) {
     ];
     port.postMessage({ type: 'CSS_RETRY' });
     if (backend === 'ollama') {
-      fullText = await streamOllama(settings, retryMessages, port, { systemPrompt });
+      fullText = await streamOllama(settings, retryMessages, port, { systemPrompt, signal });
     } else {
-      fullText = await streamClaude(settings, retryMessages, port, { systemPrompt });
+      fullText = await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
     }
   }
 
@@ -238,10 +241,19 @@ async function generateCssStreaming(msg, port) {
   const lineDiff = computeLineDiff(currentCss, finalCss);
   const updatedHistory = [...messages, { role: 'assistant', content: fullText }];
 
+  const isFullRewrite = !currentCss || !currentCss.trim();
+  const patchPreview = cssMode === 'patch'
+    ? parsed.css
+    : isFullRewrite
+      ? finalCss
+      : extractPatchPreview(currentCss, finalCss);
+
   port.postMessage({
     type: 'CSS_DONE',
     css: finalCss,
     originalCss: currentCss,
+    patchPreview,
+    isFullRewrite,
     changelist,
     lineDiff,
     history: updatedHistory,
@@ -386,11 +398,12 @@ async function streamChatMessage(msg, port) {
 
 // ─── Claude Streaming ─────────────────────────────────────────────────────────
 
-async function streamClaude(settings, messages, port, { systemPrompt = SYSTEM_PROMPT_CLAUDE, chunkType = 'CSS_CHUNK' } = {}) {
+async function streamClaude(settings, messages, port, { systemPrompt = SYSTEM_PROMPT_CLAUDE, chunkType = 'CSS_CHUNK', signal } = {}) {
   if (!settings.claudeApiKey) throw new Error('Claude API key not set. Go to the Setup tab.');
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': settings.claudeApiKey,
@@ -443,7 +456,7 @@ async function streamClaude(settings, messages, port, { systemPrompt = SYSTEM_PR
 
 // ─── Ollama Streaming ─────────────────────────────────────────────────────────
 
-async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PROMPT_OLLAMA, chunkType = 'CSS_CHUNK' } = {}) {
+async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PROMPT_OLLAMA, chunkType = 'CSS_CHUNK', signal } = {}) {
   const baseUrl = settings.ollamaUrl || 'http://localhost:11434';
   const hasImages = messages.some(m =>
     Array.isArray(m.content) && m.content.some(b => b.type === 'image')
@@ -474,6 +487,7 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
   try {
     resp = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
+      signal,
       headers: ollamaHeaders,
       body: JSON.stringify({ model, messages: ollamaMessages, stream: true, options: { num_ctx: 32768 } }),
     });
@@ -743,6 +757,61 @@ function computeChangelist(oldCss, newCss) {
     if (!newRules[sel]) changes.push(`Removed: ${sel}`);
   }
   return changes;
+}
+
+// ─── Patch Preview ───────────────────────────────────────────────────────────
+
+function extractPatchPreview(oldCss, newCss) {
+  function splitBlocks(css) {
+    const blocks = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          blocks.push(css.slice(start, i + 1).trim());
+          start = i + 1;
+        }
+      }
+    }
+    const tail = css.slice(start).trim();
+    if (tail) blocks.push(tail);
+    return blocks.filter(Boolean);
+  }
+  function selectorOf(block) {
+    const i = block.indexOf('{');
+    return i === -1 ? null : block.slice(0, i).trim();
+  }
+
+  const oldBlocks = splitBlocks(oldCss || '');
+  const newBlocks = splitBlocks(newCss || '');
+  const oldMap = new Map();
+  for (const b of oldBlocks) {
+    const sel = selectorOf(b);
+    if (sel) oldMap.set(sel, b);
+  }
+
+  const changed = [];
+  const newSelectors = new Set();
+  for (const b of newBlocks) {
+    const sel = selectorOf(b);
+    if (!sel) continue;
+    newSelectors.add(sel);
+    const old = oldMap.get(sel);
+    if (!old || old !== b) changed.push(b);
+  }
+
+  const removed = [];
+  for (const [sel] of oldMap) {
+    if (!newSelectors.has(sel)) removed.push(sel);
+  }
+
+  let preview = changed.join('\n\n');
+  if (removed.length) {
+    preview += (preview ? '\n\n' : '') + `/* Removed: ${removed.join(', ')} */`;
+  }
+  return preview.trim() || '/* No changes */';
 }
 
 // ─── Backups ──────────────────────────────────────────────────────────────────

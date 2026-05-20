@@ -7,10 +7,14 @@ const state = {
   designRefCollapsed: false,
   originalCss: null,
   lastGeneratedCss: null,
+  patchPreview: null,
+  isFullRewrite: false,
+  viewingFull: false,
+  generatePort: null,
+  stopping: false,
   changelist: [],
   messageHistory: [],
   applied: false,
-  undone: false,
   scopeMode: 'all',     // 'all' | '1' | '2' | '3' | '4' | '5'
   chatHistory: [],
   siteTabId: null,      // tab this panel is locked to
@@ -55,7 +59,16 @@ function setupMainTabs() {
       document.querySelectorAll('.main-tab').forEach(b => b.classList.toggle('active', b === btn));
       document.getElementById('workflowPanel').classList.toggle('hidden', panel !== 'agent');
       document.getElementById('helperPanel').classList.toggle('hidden', panel !== 'helper');
+      document.getElementById('newChat').classList.toggle('hidden', panel !== 'helper');
     });
+  });
+
+  document.getElementById('newChat').addEventListener('click', () => {
+    state.chatHistory = [];
+    document.getElementById('chatMessages').innerHTML = '';
+    document.getElementById('chatInput').value = '';
+    document.getElementById('chatInput').style.height = 'auto';
+    updateTokenCounter();
   });
 }
 
@@ -458,6 +471,21 @@ function setupWorkflowTab() {
   document.getElementById('reconsolidate').addEventListener('click', handleReconsolidate);
   document.getElementById('applyChanges').addEventListener('click', handleApply);
   document.getElementById('revise').addEventListener('click', handleRevise);
+  document.getElementById('cssBlock').addEventListener('input', autoResizeCssBlock);
+  document.getElementById('toggleCssView').addEventListener('click', handleToggleCssView);
+  document.getElementById('stopGenerate').addEventListener('click', () => {
+    if (state.generatePort) {
+      state.stopping = true;
+      state.generatePort.disconnect();
+      state.generatePort = null;
+      // port.onDisconnect doesn't fire on the initiating side, so clean up manually
+      document.getElementById('stopGenerate').classList.add('hidden');
+      document.getElementById('cssBlock').disabled = false;
+      document.getElementById('cssBlock').placeholder = '';
+      setLoading(document.getElementById('generateCss'), false, 'Generate CSS');
+      setLoading(document.getElementById('reconsolidate'), false, 'Reconsolidate CSS');
+    }
+  });
 }
 
 async function handleTakeScreenshot() {
@@ -527,37 +555,17 @@ async function handleApply() {
   const btn = document.getElementById('applyChanges');
 
   if (state.applied) {
-    // Undo → restore, then offer Redo
+    // Undo → restore and go back to Apply Changes
     try {
       setLoading(btn, true, 'Restoring…');
       await send({ type: 'RESTORE_BACKUP', index: 0 });
       state.applied = false;
-      state.undone = true;
-      setApplyButton('redo');
+      setApplyButton('apply');
       await loadBackups();
     } catch (e) {
       showError(e.message);
     } finally {
-      setLoading(btn, false, 'Redo');
-    }
-    return;
-  }
-
-  if (state.undone) {
-    // Redo → re-apply the generated CSS
-    try {
-      setLoading(btn, true, 'Applying…');
-      await send({ type: 'SAVE_BACKUP', css: state.originalCss || '' });
-      const settings = await send({ type: 'GET_SETTINGS' });
-      await send({ type: 'WRITE_CSS', css: cssToApply(), autoPublish: settings.autoPublish });
-      state.applied = true;
-      state.undone = false;
-      setApplyButton('undo');
-      await loadBackups();
-    } catch (e) {
-      showError(e.message);
-    } finally {
-      setLoading(btn, false, state.applied ? '← Undo' : 'Redo');
+      setLoading(btn, false, 'Apply Changes');
     }
     return;
   }
@@ -569,7 +577,6 @@ async function handleApply() {
     const settings = await send({ type: 'GET_SETTINGS' });
     await send({ type: 'WRITE_CSS', css: cssToApply(), autoPublish: settings.autoPublish });
     state.applied = true;
-    state.undone = false;
     setApplyButton('undo');
     await loadBackups();
   } catch (e) {
@@ -609,19 +616,44 @@ async function handleRevise() {
   });
 }
 
+function handleToggleCssView() {
+  const cssBlock = document.getElementById('cssBlock');
+  const toggleBtn = document.getElementById('toggleCssView');
+  const label = document.getElementById('cssSectionLabel');
+
+  state.viewingFull = !state.viewingFull;
+
+  if (state.viewingFull) {
+    cssBlock.value = state.lastGeneratedCss || '';
+    label.textContent = 'Full CSS';
+    toggleBtn.textContent = 'Show changes only';
+  } else {
+    cssBlock.value = state.patchPreview || '';
+    label.textContent = 'Changes';
+    toggleBtn.textContent = 'Show full CSS';
+  }
+  cssBlock.scrollTop = 0;
+  autoResizeCssBlock();
+}
+
 // ─── Streaming helper ─────────────────────────────────────────────────────────
 
 function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, onDone, onError }) {
   const cssBlock = document.getElementById('cssBlock');
 
-  // Show the block immediately so text appears as it streams
   showGeneratedCss('');
-  cssBlock.textContent = '';
+  cssBlock.value = '';
+  cssBlock.disabled = true;
+  cssBlock.placeholder = 'Generating…';
   resetApplyButton();
+  document.getElementById('stopGenerate').classList.remove('hidden');
+  document.getElementById('toggleCssView').classList.add('hidden');
 
-  let rawBuffer = '';
+  state.stopping = false;
+  let charCount = 0;
 
   const port = chrome.runtime.connect({ name: 'generate' });
+  state.generatePort = port;
 
   port.onMessage.addListener(msg => {
     if (msg.type === 'CSS_DEBUG') {
@@ -630,23 +662,42 @@ function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, 
       note.classList.remove('hidden');
 
     } else if (msg.type === 'CSS_RETRY') {
-      rawBuffer = '';
-      cssBlock.textContent = '';
+      charCount = 0;
+      cssBlock.placeholder = 'Retrying…';
 
     } else if (msg.type === 'CSS_CHUNK') {
-      rawBuffer += msg.text;
-      cssBlock.textContent = extractDisplayCss(rawBuffer);
-      // Auto-scroll to bottom of the code block
-      cssBlock.scrollTop = cssBlock.scrollHeight;
+      charCount += msg.text.length;
+      cssBlock.placeholder = `Generating… (${charCount} chars)`;
 
     } else if (msg.type === 'CSS_DONE') {
       state.lastGeneratedCss = msg.css;
       state.originalCss = msg.originalCss;
+      state.patchPreview = msg.patchPreview || msg.css;
+      state.isFullRewrite = !!msg.isFullRewrite;
+      state.viewingFull = state.isFullRewrite;
       state.changelist = msg.changelist || [];
       state.messageHistory = msg.history || [];
+
       resetApplyButton();
-      cssBlock.textContent = msg.css;
+
+      const label = document.getElementById('cssSectionLabel');
+      const toggleBtn = document.getElementById('toggleCssView');
+
+      if (state.isFullRewrite) {
+        label.textContent = 'Generated CSS';
+        toggleBtn.classList.add('hidden');
+        cssBlock.value = msg.css;
+      } else {
+        label.textContent = 'Changes';
+        toggleBtn.textContent = 'Show full CSS';
+        toggleBtn.classList.remove('hidden');
+        cssBlock.value = state.patchPreview;
+      }
+
+      cssBlock.disabled = false;
+      cssBlock.placeholder = '';
       cssBlock.scrollTop = 0;
+      autoResizeCssBlock();
 
       const diffStat = document.getElementById('diffStat');
       if (msg.lineDiff && (msg.lineDiff.added || msg.lineDiff.removed)) {
@@ -659,20 +710,32 @@ function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, 
         diffStat.classList.add('hidden');
       }
 
+      endStream();
       onDone();
 
     } else if (msg.type === 'CSS_ERROR') {
+      cssBlock.disabled = false;
+      endStream();
       showError(msg.error);
       onError();
     }
   });
 
   port.onDisconnect.addListener(() => {
+    if (state.stopping) return;
+    endStream();
+    cssBlock.disabled = false;
+    cssBlock.placeholder = '';
     if (chrome.runtime.lastError) {
       showError('Connection lost: ' + chrome.runtime.lastError.message);
-      onError();
     }
+    onError();
   });
+
+  function endStream() {
+    state.generatePort = null;
+    document.getElementById('stopGenerate').classList.add('hidden');
+  }
 
   port.postMessage({
     type: 'GENERATE_CSS',
@@ -686,10 +749,52 @@ function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, 
   });
 }
 
+function mergePatchClient(existingCss, patchCss) {
+  if (!patchCss || !patchCss.trim()) return existingCss;
+  if (!existingCss || !existingCss.trim()) return patchCss;
+  function splitBlocks(css) {
+    const blocks = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') {
+        depth--;
+        if (depth === 0) { blocks.push(css.slice(start, i + 1).trim()); start = i + 1; }
+      }
+    }
+    const tail = css.slice(start).trim();
+    if (tail) blocks.push(tail);
+    return blocks.filter(Boolean);
+  }
+  function selectorOf(b) { const i = b.indexOf('{'); return i === -1 ? null : b.slice(0, i).trim(); }
+  const existingBlocks = splitBlocks(existingCss);
+  const patchBlocks = splitBlocks(patchCss);
+  const patchMap = new Map();
+  for (const b of patchBlocks) { const s = selectorOf(b); if (s) patchMap.set(s, b); }
+  const merged = existingBlocks.map(b => {
+    const s = selectorOf(b);
+    if (s && patchMap.has(s)) { const r = patchMap.get(s); patchMap.delete(s); return r; }
+    return b;
+  });
+  for (const b of patchMap.values()) merged.push(b);
+  return merged.join('\n\n');
+}
+
 function cssToApply() {
-  const css = state.lastGeneratedCss || '';
-  if (!document.getElementById('forceImportant').checked) return css;
-  return css.replace(/:\s*([^;{}]+?)\s*(?:!important\s*)?;/g, (_, val) => `: ${val.trim()} !important;`);
+  const cssBlock = document.getElementById('cssBlock');
+  let css;
+  if (state.viewingFull || state.isFullRewrite) {
+    css = cssBlock.value;
+  } else {
+    css = mergePatchClient(state.originalCss || '', cssBlock.value);
+  }
+  return css;
+}
+
+function autoResizeCssBlock() {
+  const el = document.getElementById('cssBlock');
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 320) + 'px';
 }
 
 // Strip the <css> wrapper tags from the live stream display
@@ -703,7 +808,7 @@ function extractDisplayCss(raw) {
 }
 
 function showGeneratedCss(css) {
-  document.getElementById('cssBlock').textContent = css;
+  document.getElementById('cssBlock').value = css;
   document.getElementById('generatedSection').classList.remove('hidden');
   document.getElementById('generatedDivider').style.display = '';
   document.getElementById('generatedSection').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -715,9 +820,6 @@ function setApplyButton(mode) {
   if (mode === 'undo') {
     btn.textContent = '← Undo';
     btn.classList.add('btn-undo');
-  } else if (mode === 'redo') {
-    btn.textContent = 'Redo';
-    btn.classList.add('btn-secondary');
   } else {
     btn.textContent = 'Apply Changes';
     btn.classList.add('btn-primary');
@@ -726,7 +828,6 @@ function setApplyButton(mode) {
 
 function resetApplyButton() {
   state.applied = false;
-  state.undone = false;
   setApplyButton('apply');
 }
 
