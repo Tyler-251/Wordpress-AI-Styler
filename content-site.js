@@ -1,16 +1,15 @@
 // Injected into all pages — returns a compact DOM snapshot and detects form step
 
-function domSnapshot(root, maxDepth, maxNodes) {
+function domSnapshot(root) {
   const nodes = [];
   function walk(el, depth) {
-    if (!el || nodes.length >= maxNodes || depth > maxDepth) return;
-    if (el.nodeType !== Node.ELEMENT_NODE) return;
-    nodes.push({
-      tag: el.tagName.toLowerCase(),
-      id: el.id || '',
-      classes: Array.from(el.classList).slice(0, 6),
-      depth,
-    });
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
+    const id      = el.id || '';
+    const classes = Array.from(el.classList).slice(0, 8);
+    // Only include elements that are targetable with CSS (have an id or classes)
+    if (id || classes.length) {
+      nodes.push({ tag: el.tagName.toLowerCase(), id, classes, depth });
+    }
     for (const child of el.children) walk(child, depth + 1);
   }
   walk(root, 0);
@@ -55,7 +54,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'READ_DOM') {
     const step = detectStep();
     const root = msg.stepScope ? rootForStep(msg.stepScope) : document.body;
-    const snapshot = domSnapshot(root, 6, 200);
+    const snapshot = domSnapshot(root);
     sendResponse({ dom: snapshot, step });
   } else if (msg.type === 'DETECT_STEP') {
     sendResponse({ step: detectStep() });

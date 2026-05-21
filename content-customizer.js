@@ -32,12 +32,3 @@ function writeCss(css, autoPublish) {
   return true;
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'READ_CSS') {
-    sendResponse({ css: readCss() });
-  } else if (msg.type === 'WRITE_CSS') {
-    const ok = writeCss(msg.css, msg.autoPublish);
-    sendResponse({ success: ok });
-  }
-  return false;
-});

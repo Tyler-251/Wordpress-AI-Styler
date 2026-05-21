@@ -81,7 +81,7 @@ async function handleMessage(msg) {
     case 'TAKE_SCREENSHOT':   return takeScreenshot();
     case 'WRITE_CSS':         return writeCss(msg.css, msg.autoPublish);
     case 'GET_BACKUPS':       return getBackups();
-    case 'SAVE_BACKUP':       return saveBackup(msg.css);
+    case 'SAVE_BACKUP':       return saveBackup(msg.css, msg.label);
     case 'RESTORE_BACKUP':    return restoreBackup(msg.index);
     case 'CLEAR_BACKUPS':     return clearBackups();
     case 'GET_SETTINGS':      return getSettings();
@@ -148,76 +148,104 @@ chrome.runtime.onConnect.addListener(port => {
 });
 
 async function generateCssStreaming(msg, port, signal) {
-  const { instructions, baseCss, screenshotDataUrl, designRefDataUrl, history, stepScope, siteTabId } = msg;
+  const { instructions, screenshotDataUrl, designRefDataUrl, history, stepScope, siteTabId } = msg;
   const settings = await getSettings();
 
-  // Read current CSS
-  let currentCss = baseCss ?? null;
-  if (currentCss === null) {
-    const custTab = await findCustomizerTab();
-    if (!custTab) throw new Error('WordPress Customizer tab not found.\nOpen /wp-admin/customize.php in a tab first.');
-    currentCss = await readCssFromTab(custTab.id);
-  }
+  // Always read the live CSS from the Customizer — never use a cached value.
+  // This guarantees the agent sees whatever is actually in the Additional CSS
+  // field right now, even if it was manually edited or applied since last run.
+  const custTab = await findCustomizerTab();
+  if (!custTab) throw new Error('WordPress Customizer tab not found.\nOpen /wp-admin/customize.php in a tab first.');
+  const currentCss = await readCssFromTab(custTab.id);
 
-  // DOM snapshot from the exact tab the screenshot came from
+  const isReconsolidate = instructions === '__reconsolidate__';
+  const isRevision      = history && history.length > 0;
+  const backend  = settings.aiBackend === 'ollama' ? 'ollama' : 'claude';
+  const cssMode  = isReconsolidate ? 'full' : (settings.cssMode || 'full');
+  const systemPrompt = SYSTEM_PROMPTS[backend][cssMode];
+
+  // DOM snapshot — skip on revisions, model already has it from turn 1
   let domSnapshot = null;
-  let domDebug = 'DOM: no siteTabId — take a screenshot first';
-  if (siteTabId) {
-    try {
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId: siteTabId },
-        world: 'ISOLATED',
-        func: (stepScopeNum) => {
-          function snap(root, maxDepth, maxNodes) {
-            const nodes = [];
-            function walk(el, depth) {
-              if (!el || nodes.length >= maxNodes || depth > maxDepth) return;
-              if (el.nodeType !== Node.ELEMENT_NODE) return;
-              nodes.push({ tag: el.tagName.toLowerCase(), id: el.id || '', classes: Array.from(el.classList).slice(0, 6), depth });
-              for (const child of el.children) walk(child, depth + 1);
-            }
-            walk(root, 0);
-            return nodes;
-          }
-          let root = document.body;
-          if (stepScopeNum) {
-            root = document.querySelector(`.tab.step${stepScopeNum}`)
-              || document.querySelector(`#step${stepScopeNum}`)
-              || document.body;
-          }
-          return snap(root, 6, 200);
-        },
-        args: [stepScope || null],
-      });
-      domSnapshot = r.result;
-      domDebug = domSnapshot
-        ? `DOM: ${domSnapshot.length} nodes from tab ${siteTabId}`
-        : `DOM: executeScript returned null for tab ${siteTabId}`;
-    } catch (e) {
-      domDebug = `DOM: executeScript failed — ${e.message}`;
+  let domDebug = 'DOM: skipped (revision — using existing conversation context)';
+  if (!isRevision) {
+    if (siteTabId) {
+      try {
+        const frame = await resolveContentFrame(siteTabId);
+        domSnapshot = await getDomSnapshot(frame.tabId, stepScope, frame.frameId);
+        const src = frame.frameId !== null ? 'customizer iframe' : frame.tabId !== siteTabId ? 'front-end tab' : 'customizer';
+        domDebug = domSnapshot
+          ? `DOM: ${domSnapshot.length} nodes (${src})`
+          : `DOM: content script returned empty (${src})`;
+      } catch (e) {
+        domDebug = `DOM: ${e.message}`;
+      }
+    } else {
+      domDebug = 'DOM: no siteTabId';
     }
   }
   port.postMessage({ type: 'CSS_DEBUG', text: domDebug });
 
-  const isReconsolidate = instructions === '__reconsolidate__';
-  const backend = settings.aiBackend === 'ollama' ? 'ollama' : 'claude';
-  const cssMode = isReconsolidate ? 'full' : (settings.cssMode || 'full');
-  const systemPrompt = SYSTEM_PROMPTS[backend][cssMode];
+  // Vision digest — Ollama pre-processes images with the vision model.
+  // Skipped on revisions: the digest text is already in the conversation history.
+  let screenshotDigest = null;
+  let designRefDigest  = null;
+  if (backend === 'ollama' && !isRevision) {
+    const digestHint = isReconsolidate ? 'consolidate and clean up CSS' : instructions;
+    if (screenshotDataUrl) {
+      port.postMessage({ type: 'CSS_DEBUG', text: `Vision: analyzing screenshot with ${settings.ollamaVisionModel || 'llava'}…` });
+      try {
+        screenshotDigest = await digestImageWithOllama(settings, screenshotDataUrl, digestHint, port, signal);
+        port.postMessage({ type: 'CSS_DEBUG', text: `Vision: screenshot digest complete (${screenshotDigest.length} chars)` });
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        port.postMessage({ type: 'CSS_DEBUG', text: `Vision: screenshot failed — ${e.message}` });
+      }
+    }
+    if (designRefDataUrl) {
+      port.postMessage({ type: 'CSS_DEBUG', text: `Vision: analyzing design ref with ${settings.ollamaVisionModel || 'llava'}…` });
+      try {
+        designRefDigest = await digestImageWithOllama(settings, designRefDataUrl, digestHint, port, signal);
+        port.postMessage({ type: 'CSS_DEBUG', text: `Vision: design ref digest complete (${designRefDigest.length} chars)` });
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        port.postMessage({ type: 'CSS_DEBUG', text: `Vision: design ref failed — ${e.message}` });
+      }
+    }
+  }
 
-  // Build user message content
+  // Context stats
+  port.postMessage({
+    type: 'CSS_STATS',
+    stats: isRevision
+      ? { summary: 'Revision — reusing existing conversation context', log: `REVISION\n\nInstructions: ${instructions}` }
+      : buildContextLog({
+          instructions: isReconsolidate ? '(reconsolidate)' : instructions,
+          domSnapshot, currentCss,
+          screenshotDataUrl, screenshotDigest,
+          designRefDataUrl, designRefDigest,
+          backend,
+        }),
+  });
+
+  // Build user message — revisions send only the instruction, no re-injected context
   const { userContent } = buildUserContent({
-    currentCss, domSnapshot, screenshotDataUrl, designRefDataUrl, instructions, settings, isReconsolidate,
+    currentCss: isRevision ? null : currentCss,
+    domSnapshot: isRevision ? null : domSnapshot,
+    screenshotDataUrl: isRevision ? null : screenshotDataUrl,
+    screenshotDigest:  isRevision ? null : screenshotDigest,
+    designRefDataUrl:  isRevision ? null : designRefDataUrl,
+    designRefDigest:   isRevision ? null : designRefDigest,
+    instructions, settings, isReconsolidate,
   });
 
   const messages = [...(history || []), { role: 'user', content: userContent }];
 
   // Stream
-  let fullText = '';
-  if (backend === 'ollama') {
-    fullText = await streamOllama(settings, messages, port, { systemPrompt, signal });
-  } else {
-    fullText = await streamClaude(settings, messages, port, { systemPrompt, signal });
-  }
+  let result = backend === 'ollama'
+    ? await streamOllama(settings, messages, port, { systemPrompt, signal })
+    : await streamClaude(settings, messages, port, { systemPrompt, signal });
+  let fullText = result.text;
+  let inputTokens = result.inputTokens, outputTokens = result.outputTokens;
 
   // If the model didn't wrap its output in <css> tags, nudge it and retry once
   if (!fullText.includes('<css>')) {
@@ -227,11 +255,12 @@ async function generateCssStreaming(msg, port, signal) {
       { role: 'user', content: 'Your response did not include a <css> block. Please reformat your CSS wrapped in <css> tags exactly like this:\n<css>\n/* complete CSS here */\n</css>' },
     ];
     port.postMessage({ type: 'CSS_RETRY' });
-    if (backend === 'ollama') {
-      fullText = await streamOllama(settings, retryMessages, port, { systemPrompt, signal });
-    } else {
-      fullText = await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
-    }
+    const retryResult = backend === 'ollama'
+      ? await streamOllama(settings, retryMessages, port, { systemPrompt, signal })
+      : await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
+    fullText = retryResult.text;
+    inputTokens  += retryResult.inputTokens;
+    outputTokens += retryResult.outputTokens;
   }
 
   const parsed = parseAiResponse(fullText);
@@ -241,10 +270,10 @@ async function generateCssStreaming(msg, port, signal) {
   const lineDiff = computeLineDiff(currentCss, finalCss);
   const updatedHistory = [...messages, { role: 'assistant', content: fullText }];
 
-  const isFullRewrite = !currentCss || !currentCss.trim();
+  const isEmptyStart = !currentCss || !currentCss.trim();
   const patchPreview = cssMode === 'patch'
     ? parsed.css
-    : isFullRewrite
+    : isEmptyStart
       ? finalCss
       : extractPatchPreview(currentCss, finalCss);
 
@@ -253,17 +282,27 @@ async function generateCssStreaming(msg, port, signal) {
     css: finalCss,
     originalCss: currentCss,
     patchPreview,
-    isFullRewrite,
+    isFullRewrite: isEmptyStart,
+    cssMode,
     changelist,
     lineDiff,
     history: updatedHistory,
+    inputTokens,
+    outputTokens,
   });
 }
 
 // ─── Message builders ─────────────────────────────────────────────────────────
 
-function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, designRefDataUrl, instructions, settings, isReconsolidate }) {
+function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, screenshotDigest, designRefDataUrl, designRefDigest, instructions, settings, isReconsolidate }) {
   const userContent = [];
+
+  // Revision — all context is null, just send the instruction and let the
+  // model use the existing conversation history for everything else
+  if (!isReconsolidate && !currentCss && !domSnapshot && !screenshotDataUrl && !designRefDataUrl) {
+    userContent.push({ type: 'text', text: `Revision: ${instructions}` });
+    return { userContent };
+  }
 
   if (isReconsolidate) {
     const text =
@@ -275,16 +314,28 @@ function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, designRe
   }
 
   if (designRefDataUrl) {
-    const [meta, b64] = designRefDataUrl.split(',');
-    const mediaType = (meta.match(/data:([^;]+)/) || [])[1] || 'image/png';
-    userContent.push({ type: 'text', text: 'Design reference — align the CSS with this visual target:' });
-    userContent.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } });
+    if (designRefDigest) {
+      // Ollama: image was pre-processed by vision model — use text description
+      userContent.push({ type: 'text', text: `Design reference analysis (from vision model):\n${designRefDigest}` });
+    } else {
+      // Claude: pass image natively
+      const [meta, b64] = designRefDataUrl.split(',');
+      const mediaType = (meta.match(/data:([^;]+)/) || [])[1] || 'image/png';
+      userContent.push({ type: 'text', text: 'Design reference — align the CSS with this visual target:' });
+      userContent.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } });
+    }
   }
 
   if (screenshotDataUrl) {
-    const [, b64] = screenshotDataUrl.split(',');
-    userContent.push({ type: 'text', text: 'Current page screenshot:' });
-    userContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } });
+    if (screenshotDigest) {
+      // Ollama: image was pre-processed by vision model — use text description
+      userContent.push({ type: 'text', text: `Page screenshot analysis (from vision model):\n${screenshotDigest}` });
+    } else {
+      // Claude: pass image natively
+      const [, b64] = screenshotDataUrl.split(',');
+      userContent.push({ type: 'text', text: 'Current page screenshot:' });
+      userContent.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } });
+    }
   }
 
   let text = `Current Additional CSS:\n${currentCss || '(empty)'}\n\n`;
@@ -300,7 +351,7 @@ function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, designRe
 const SYSTEM_PROMPT_CHAT = `You are a CSS assistant embedded in a WordPress styling tool. Answer directly and briefly — no lists of suggestions, no asking the user to paste HTML, no emojis. When page context or CSS is provided in the conversation, use it. When writing CSS, use code blocks.`;
 
 async function streamChatMessage(msg, port) {
-  const { message, history, siteTabId, includeDom = false, includeExistingCss = false } = msg;
+  const { message, history, siteTabId, includeDom = false, includeExistingCss = false, screenshotDataUrl, designRefDataUrl } = msg;
   const settings = await getSettings();
 
   // ── Inject context once into this message ────────────────────────────────────
@@ -308,55 +359,21 @@ async function streamChatMessage(msg, port) {
   const noteParts = [];
 
   if (includeDom) {
-    let domTabId = null;
-    let domNote = '';
-    try {
-      if (!siteTabId) {
-        domNote = 'no site tab locked';
-      } else {
-        const tab = await chrome.tabs.get(siteTabId);
-        if (!tab.url.includes('wp-admin')) {
-          domTabId = siteTabId;
-        } else {
-          const origin = new URL(tab.url).origin;
-          const all = await chrome.tabs.query({});
-          const candidate = all.find(t =>
-            t.url && t.url.startsWith(origin) && !t.url.includes('wp-admin')
-          );
-          if (candidate) domTabId = candidate.id;
-          else domNote = 'no matching site tab';
-        }
-      }
-    } catch (_) {
-      domNote = 'could not access tab';
-    }
-
-    if (domTabId) {
-      try {
-        const [r] = await chrome.scripting.executeScript({
-          target: { tabId: domTabId },
-          world: 'ISOLATED',
-          func: () => {
-            const nodes = [];
-            function walk(el, depth) {
-              if (!el || nodes.length >= 200 || depth > 6) return;
-              if (el.nodeType !== Node.ELEMENT_NODE) return;
-              nodes.push({ tag: el.tagName.toLowerCase(), id: el.id || '', classes: Array.from(el.classList).slice(0, 6), depth });
-              for (const child of el.children) walk(child, depth + 1);
-            }
-            walk(document.body, 0);
-            return nodes;
-          },
-        });
-        if (r?.result) {
-          contextParts.push(`Current page DOM:\n${JSON.stringify(r.result)}`);
-          noteParts.push(`DOM (${r.result.length} nodes)`);
-        }
-      } catch (_) {
-        noteParts.push('DOM (failed)');
-      }
+    if (!siteTabId) {
+      noteParts.push('DOM (unavailable — no site tab assigned)');
     } else {
-      noteParts.push(`DOM (unavailable — ${domNote})`);
+      try {
+        const frame = await resolveContentFrame(siteTabId);
+        const dom = await getDomSnapshot(frame.tabId, null, frame.frameId);
+        if (dom?.length) {
+          contextParts.push(`Current page DOM:\n${JSON.stringify(dom)}`);
+          noteParts.push(`DOM (${dom.length} nodes)`);
+        } else {
+          noteParts.push('DOM (empty)');
+        }
+      } catch (e) {
+        noteParts.push(`DOM (failed — ${e.message})`);
+      }
     }
   }
 
@@ -375,25 +392,51 @@ async function streamChatMessage(msg, port) {
     }
   }
 
+  if (screenshotDataUrl) noteParts.push('Screenshot');
+  if (designRefDataUrl) noteParts.push('Design Ref');
+
   if (noteParts.length) {
     port.postMessage({ type: 'CHAT_CONTEXT_INJECTED', note: noteParts.join(' + ') });
   }
 
-  const fullMessage = contextParts.length
-    ? contextParts.join('\n\n') + '\n\n---\n\n' + message
-    : message;
-
-  const messages = [...(history || []), { role: 'user', content: fullMessage }];
-
-  let fullText = '';
-  if (settings.aiBackend === 'ollama') {
-    fullText = await streamOllama(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
+  // Build user content — multimodal if images are attached
+  let userContent;
+  const hasImages = screenshotDataUrl || designRefDataUrl;
+  if (hasImages) {
+    const parts = [];
+    if (contextParts.length) {
+      parts.push({ type: 'text', text: contextParts.join('\n\n') + '\n\n---\n\n' });
+    }
+    if (designRefDataUrl) {
+      const mediaType = (designRefDataUrl.match(/data:([^;]+)/) || [])[1] || 'image/png';
+      parts.push({ type: 'text', text: 'Design reference:' });
+      parts.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: designRefDataUrl.split(',')[1] } });
+    }
+    if (screenshotDataUrl) {
+      parts.push({ type: 'text', text: 'Page screenshot:' });
+      parts.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotDataUrl.split(',')[1] } });
+    }
+    parts.push({ type: 'text', text: message });
+    userContent = parts;
   } else {
-    fullText = await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
+    userContent = contextParts.length
+      ? contextParts.join('\n\n') + '\n\n---\n\n' + message
+      : message;
   }
 
-  const updatedHistory = [...messages, { role: 'assistant', content: fullText }];
-  port.postMessage({ type: 'CHAT_DONE', history: updatedHistory });
+  const messages = [...(history || []), { role: 'user', content: userContent }];
+
+  const chatResult = settings.aiBackend === 'ollama'
+    ? await streamOllama(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' })
+    : await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
+
+  const updatedHistory = [...messages, { role: 'assistant', content: chatResult.text }];
+  port.postMessage({
+    type: 'CHAT_DONE',
+    history: updatedHistory,
+    inputTokens: chatResult.inputTokens,
+    outputTokens: chatResult.outputTokens,
+  });
 }
 
 // ─── Claude Streaming ─────────────────────────────────────────────────────────
@@ -428,13 +471,14 @@ async function streamClaude(settings, messages, port, { systemPrompt = SYSTEM_PR
   const decoder = new TextDecoder();
   let fullText = '';
   let buf = '';
+  let inputTokens = 0, outputTokens = 0;
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split('\n');
-    buf = lines.pop(); // keep incomplete line in buffer
+    buf = lines.pop();
 
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue;
@@ -442,7 +486,15 @@ async function streamClaude(settings, messages, port, { systemPrompt = SYSTEM_PR
       if (data === '[DONE]') continue;
       try {
         const event = JSON.parse(data);
-        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+        if (event.type === 'message_start') {
+          inputTokens = event.message?.usage?.input_tokens || 0;
+        } else if (event.type === 'message_delta') {
+          outputTokens = event.usage?.output_tokens || 0;
+          if (event.delta?.stop_reason === 'max_tokens') {
+            port.postMessage({ type: chunkType === 'CSS_CHUNK' ? 'CSS_DEBUG' : 'CHAT_DEBUG',
+              text: '⚠️ Response was cut off — hit max_tokens limit. Try a shorter instruction or switch to Patch mode.' });
+          }
+        } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
           const chunk = event.delta.text;
           fullText += chunk;
           port.postMessage({ type: chunkType, text: chunk });
@@ -451,7 +503,7 @@ async function streamClaude(settings, messages, port, { systemPrompt = SYSTEM_PR
     }
   }
 
-  return fullText;
+  return { text: fullText, inputTokens, outputTokens };
 }
 
 // ─── Ollama Streaming ─────────────────────────────────────────────────────────
@@ -517,6 +569,7 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
   const decoder = new TextDecoder();
   let fullText = '';
   let buf = '';
+  let inputTokens = 0, outputTokens = 0;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -534,11 +587,16 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
           fullText += chunk;
           port.postMessage({ type: chunkType, text: chunk });
         }
+        // Final message contains actual token counts
+        if (event.done) {
+          inputTokens  = event.prompt_eval_count || 0;
+          outputTokens = event.eval_count || 0;
+        }
       } catch (_) {}
     }
   }
 
-  return fullText;
+  return { text: fullText, inputTokens, outputTokens };
 }
 
 // ─── Response Parser ──────────────────────────────────────────────────────────
@@ -578,6 +636,10 @@ function parseAiResponse(text) {
 async function takeScreenshot() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) throw new Error('No active tab found.');
+  const url = tab.url || '';
+  if (url.startsWith('chrome-extension://') || url.startsWith('chrome://') || url.startsWith('about:') || url.startsWith('edge://')) {
+    throw new Error('Cannot screenshot an extension or browser page — switch to your site tab first.');
+  }
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
   return { dataUrl, tabId: tab.id, tabTitle: tab.title || '' };
 }
@@ -659,6 +721,192 @@ async function findCustomizerTab() {
   return tabs.find(t => t.url && t.url.includes('customize.php')) || null;
 }
 
+// ─── Ollama Vision Digest ─────────────────────────────────────────────────────
+// Sends an image to the Ollama vision model with a CSS-focused prompt and
+// returns a plain-text description. This pre-processes images before the main
+// text model runs, since Ollama uses separate models for vision vs. text.
+
+async function digestImageWithOllama(settings, imageDataUrl, instruction, port, signal) {
+  const baseUrl = settings.ollamaUrl || 'http://localhost:11434';
+  const model   = settings.ollamaVisionModel || 'llava';
+
+  const prompt =
+    `You are a CSS expert analyzing a web page image to assist with styling.\n` +
+    `Describe every visually observable CSS-relevant property:\n` +
+    `- Layout: element widths, heights, positions, alignment, flexbox/grid hints\n` +
+    `- Colors: backgrounds, text, borders, overlays (use hex/rgb where estimable)\n` +
+    `- Typography: font sizes, weights, line heights\n` +
+    `- Spacing: padding, margins, gaps between components\n` +
+    `- Effects: shadows, gradients, opacity, blur, border-radius, glass/frosted effects\n` +
+    `- Component names: class names, element types, and relationships if visible\n\n` +
+    `Developer goal: "${instruction}"\n` +
+    `Focus especially on details relevant to achieving that goal.\n` +
+    `Be specific and technical — your output is fed directly to a CSS-writing LLM.`;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (settings.cfClientId && settings.cfClientSecret) {
+    headers['CF-Access-Client-Id']     = settings.cfClientId;
+    headers['CF-Access-Client-Secret'] = settings.cfClientSecret;
+  }
+
+  let resp;
+  try {
+    resp = await fetch(`${baseUrl}/api/generate`, {
+      method: 'POST', signal, headers,
+      body: JSON.stringify({ model, prompt, images: [imageDataUrl.split(',')[1]], stream: true }),
+    });
+  } catch (e) {
+    throw new Error(`Vision model unreachable: ${e.message}`);
+  }
+  if (!resp.ok) throw new Error(`Vision model returned ${resp.status}`);
+
+  const reader  = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '', buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const ev = JSON.parse(line);
+        if (ev.response) {
+          fullText += ev.response;
+          port.postMessage({ type: 'CSS_DEBUG', text: `Vision (${model}): ${fullText.length} chars…` });
+        }
+      } catch (_) {}
+    }
+  }
+  return fullText;
+}
+
+// ─── Context Log Builder ──────────────────────────────────────────────────────
+
+function buildContextLog({ instructions, domSnapshot, currentCss, screenshotDataUrl, screenshotDigest, designRefDataUrl, designRefDigest, backend }) {
+  const summaryParts = [];
+  const lines = [
+    '=== SYNC STYLER CONTEXT LOG ===',
+    `Generated: ${new Date().toLocaleString()}`,
+    `Backend: ${backend}`,
+    '',
+    'INSTRUCTIONS:',
+    instructions || '(none)',
+    '',
+  ];
+
+  if (domSnapshot && domSnapshot.length) {
+    summaryParts.push(`DOM ${domSnapshot.length} nodes`);
+    lines.push(`DOM SNAPSHOT (${domSnapshot.length} nodes):`, JSON.stringify(domSnapshot, null, 2), '');
+  }
+
+  if (currentCss && currentCss.trim()) {
+    summaryParts.push(`CSS ${currentCss.length} chars`);
+    lines.push(`EXISTING CSS (${currentCss.length} chars):`, currentCss, '');
+  }
+
+  if (screenshotDataUrl) {
+    if (screenshotDigest) {
+      summaryParts.push('Screenshot (vision digested)');
+      lines.push('SCREENSHOT — VISION DIGEST:', screenshotDigest, '');
+    } else {
+      summaryParts.push('Screenshot (native multimodal)');
+      lines.push('SCREENSHOT: [image passed directly — Claude multimodal]', '');
+    }
+  }
+
+  if (designRefDataUrl) {
+    if (designRefDigest) {
+      summaryParts.push('Design Ref (vision digested)');
+      lines.push('DESIGN REF — VISION DIGEST:', designRefDigest, '');
+    } else {
+      summaryParts.push('Design Ref (native multimodal)');
+      lines.push('DESIGN REF: [image passed directly — Claude multimodal]', '');
+    }
+  }
+
+  return {
+    summary: summaryParts.length ? 'Passing → ' + summaryParts.join(' · ') : 'No context attached',
+    log: lines.join('\n'),
+  };
+}
+
+// ─── Content Frame Resolver ───────────────────────────────────────────────────
+// Returns { tabId, frameId } pointing to the best front-end DOM source:
+//   1. A separate front-end tab on the same origin (if open)
+//   2. The Customizer's preview iframe (always present when Customizer is open)
+//   3. The siteTabId itself as a last resort
+
+async function resolveContentFrame(siteTabId) {
+  if (!siteTabId) return null;
+  try {
+    const tab = await chrome.tabs.get(siteTabId);
+    if (!tab.url || !tab.url.includes('wp-admin')) {
+      return { tabId: siteTabId, frameId: null }; // already a front-end tab
+    }
+
+    const origin = new URL(tab.url).origin;
+
+    // 1. Look for a standalone front-end tab
+    const all = await chrome.tabs.query({});
+    const frontTab = all.find(t =>
+      t.url &&
+      t.url.startsWith(origin) &&
+      !t.url.includes('wp-admin') &&
+      !t.url.startsWith('chrome')
+    );
+    if (frontTab) return { tabId: frontTab.id, frameId: null };
+
+    // 2. Use the Customizer preview iframe (the iframe that renders the live site)
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: siteTabId });
+    const previewFrame = frames?.find(f =>
+      f.url &&
+      f.url.startsWith(origin) &&
+      !f.url.includes('wp-admin')
+    );
+    if (previewFrame) return { tabId: siteTabId, frameId: previewFrame.frameId };
+
+  } catch (_) {}
+
+  // 3. Fall back to the Customizer tab top-level
+  return { tabId: siteTabId, frameId: null };
+}
+
+// ─── DOM Snapshot (with auto-inject fallback) ─────────────────────────────────
+
+async function getDomSnapshot(tabId, stepScope, frameId = null) {
+  const msgOpts = frameId !== null ? { frameId } : {};
+  const injectTarget = frameId !== null ? { tabId, frameIds: [frameId] } : { tabId };
+  const msg = { type: 'READ_DOM', stepScope: stepScope || null };
+
+  // First attempt — content script may already be injected
+  try {
+    const resp = await chrome.tabs.sendMessage(tabId, msg, msgOpts);
+    return resp?.dom || null;
+  } catch (_) {
+    // Content script not loaded yet — inject it, then retry once
+  }
+
+  try {
+    await chrome.scripting.executeScript({ target: injectTarget, files: ['content-site.js'] });
+  } catch (injectErr) {
+    throw new Error(`Could not inject content script: ${injectErr.message}`);
+  }
+
+  // Brief delay to let the script initialize
+  await new Promise(r => setTimeout(r, 100));
+
+  try {
+    const resp = await chrome.tabs.sendMessage(tabId, msg, msgOpts);
+    return resp?.dom || null;
+  } catch (retryErr) {
+    throw new Error(`Content script unreachable after injection: ${retryErr.message}`);
+  }
+}
+
 
 // ─── CSS Patch Merge ─────────────────────────────────────────────────────────
 
@@ -714,12 +962,27 @@ function mergeCssPatch(existingCss, patchCss) {
 // ─── Line Diff ────────────────────────────────────────────────────────────────
 
 function computeLineDiff(oldCss, newCss) {
-  const oldLines = new Set((oldCss || '').split('\n').map(l => l.trim()).filter(Boolean));
-  const newLines = new Set((newCss || '').split('\n').map(l => l.trim()).filter(Boolean));
-  let added = 0, removed = 0;
-  for (const l of newLines) if (!oldLines.has(l)) added++;
-  for (const l of oldLines) if (!newLines.has(l)) removed++;
-  return { added, removed };
+  const oldLines = (oldCss || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const newLines = (newCss || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const m = oldLines.length, n = newLines.length;
+
+  // LCS-based sequential diff (same basis as git diff).
+  // Space-optimized: only two rows of the DP table kept in memory at once.
+  let prev = new Array(n + 1).fill(0);
+  let curr = new Array(n + 1).fill(0);
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      curr[j] = oldLines[i - 1] === newLines[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], curr[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+    curr.fill(0);
+  }
+
+  const lcs = prev[n];
+  return { added: n - lcs, removed: m - lcs };
 }
 
 // ─── CSS Changelist ───────────────────────────────────────────────────────────
@@ -821,10 +1084,11 @@ async function getBackups() {
   return { backups: r.ss_backups || [] };
 }
 
-async function saveBackup(css) {
+async function saveBackup(css, label) {
   const { backups } = await getBackups();
-  const settings = await getSettings();
-  const updated = [{ timestamp: new Date().toISOString(), css }, ...backups].slice(0, settings.maxRollbacks || 20);
+  // Skip if the CSS is identical to the most recent backup
+  if (backups.length && backups[0].css === css) return { backups };
+  const updated = [{ timestamp: new Date().toISOString(), css, label: label || '' }, ...backups].slice(0, 100);
   await chrome.storage.local.set({ ss_backups: updated });
   return { backups: updated };
 }
@@ -836,7 +1100,7 @@ async function restoreBackup(index) {
   const settings = await getSettings();
   const custTab = await findCustomizerTab();
   if (custTab) {
-    try { await saveBackup(await readCssFromTab(custTab.id)); } catch (_) {}
+    try { await saveBackup(await readCssFromTab(custTab.id), `Before restoring: ${entry.label || new Date(entry.timestamp).toLocaleTimeString()}`); } catch (_) {}
   }
   return writeCss(entry.css, settings.autoPublish);
 }
@@ -858,7 +1122,7 @@ const DEFAULT_SETTINGS = {
   cfClientId: '',
   cfClientSecret: '',
   autoPublish: false,
-  maxRollbacks: 20,
+  maxRollbacks: 100,
   cssMode: 'full',
 };
 
