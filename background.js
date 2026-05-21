@@ -773,12 +773,22 @@ async function readCssFromTab(tabId) {
       if (window.wp && window.wp.customize) {
         let css = '';
         window.wp.customize.each(setting => {
-          if (setting.id.startsWith('custom_css[')) css = setting.get() || '';
+          // Multiple custom_css[theme] settings may exist after theme switches —
+          // only overwrite with a non-empty value so a stale empty setting
+          // (from an old inactive theme) doesn't wipe out the real CSS.
+          if (setting.id.startsWith('custom_css[')) {
+            const val = setting.get();
+            if (val) css = val;
+          }
         });
         if (css) return css;
       }
-      const cmEl = document.querySelector('.CodeMirror');
-      if (cmEl && cmEl.CodeMirror) return cmEl.CodeMirror.getValue();
+      // Prefer the CodeMirror scoped to the Additional CSS panel; fall back to
+      // the first one on the page (avoids grabbing a Divi builder CM instance).
+      const cmContainer = document.querySelector('#customize-control-custom_css .CodeMirror')
+        || document.querySelector('.customize-control-code_editor .CodeMirror')
+        || document.querySelector('.CodeMirror');
+      if (cmContainer && cmContainer.CodeMirror) return cmContainer.CodeMirror.getValue();
       const ta = document.querySelector('#custom_css_c1')
         || document.querySelector('textarea[id^="custom_css"]');
       return ta ? ta.value : '';
@@ -800,8 +810,13 @@ async function writeCssToTab(tabId, css, autoPublish) {
         });
       }
 
-      const cmEl = document.querySelector('.CodeMirror');
-      if (cmEl && cmEl.CodeMirror) { cmEl.CodeMirror.setValue(newCss); applied = true; }
+      if (!applied) {
+        // Only fall back to CodeMirror if wp.customize didn't handle it —
+        // Divi pages can have multiple CodeMirror instances and the first one
+        // found may not be the Additional CSS editor.
+        const cmEl = document.querySelector('.CodeMirror');
+        if (cmEl && cmEl.CodeMirror) { cmEl.CodeMirror.setValue(newCss); applied = true; }
+      }
 
       if (!applied) {
         const ta = document.querySelector('#custom_css_c1')

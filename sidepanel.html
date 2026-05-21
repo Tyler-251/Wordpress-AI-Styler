@@ -372,6 +372,17 @@
     </div><!-- /settings-body -->
 
     <div class="settings-footer">
+      <div class="tools-wrap">
+        <button class="btn-secondary btn-sm" id="toolsDropdownBtn">
+          Tools
+          <svg class="tools-chevron" viewBox="0 0 10 6" fill="none">
+            <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="tools-menu hidden" id="toolsMenu">
+          <button class="tools-menu-item" id="insertSaEzTheme">Insert SA EZ child theme</button>
+        </div>
+      </div>
       <button class="btn-secondary btn-sm" id="viewBackups">
         View Backups <span id="backupsCount">(0)</span>
       </button>
@@ -409,6 +420,7 @@
     </div>
   </div>
 
+  <script src="tools-presets.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

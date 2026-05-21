@@ -14,11 +14,5 @@
   "action": {
     "default_title": "Open Sync Styler"
   },
-  "content_scripts": [
-    {
-      "matches": ["*://*/wp-admin/customize.php*"],
-      "js": ["content-customizer.js"],
-      "run_at": "document_idle"
-    }
-  ]
+  "content_scripts": []
 }

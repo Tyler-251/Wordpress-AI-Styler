@@ -15,6 +15,8 @@ const DEEPSEEK_MODELS = [
   { id: 'deepseek-v4-pro',   label: 'V4 Pro',   inputPer1M: 0.435, outputPer1M: 0.87 },
 ];
 
+
+
 const state = {
   screenshotDataUrl: null,
   screenshotTime: null,
@@ -685,6 +687,35 @@ function setupSettings() {
     try {
       await send({ type: 'CLEAR_BACKUPS' });
       loadBackups();
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+
+  // ── Tools dropdown ──
+  const toolsWrap = document.getElementById('toolsDropdownBtn').parentElement;
+  const toolsMenu = document.getElementById('toolsMenu');
+
+  document.getElementById('toolsDropdownBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    const isOpen = !toolsMenu.classList.contains('hidden');
+    toolsMenu.classList.toggle('hidden', isOpen);
+    toolsWrap.classList.toggle('open', !isOpen);
+  });
+
+  document.addEventListener('click', () => {
+    toolsMenu.classList.add('hidden');
+    toolsWrap.classList.remove('open');
+  });
+
+  // ── Insert SA EZ child theme ──
+  document.getElementById('insertSaEzTheme').addEventListener('click', async () => {
+    toolsMenu.classList.add('hidden');
+    toolsWrap.classList.remove('open');
+    if (!confirm('This will override the current Additional CSS with the SA EZ child theme. Continue?')) return;
+    const settings = await send({ type: 'GET_SETTINGS' });
+    try {
+      await send({ type: 'WRITE_CSS', css: SA_EZ_CHILD_CSS, autoPublish: settings.autoPublish });
     } catch (e) {
       showError(e.message);
     }
