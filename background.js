@@ -51,6 +51,38 @@ Do NOT return the entire CSS file. Return only new or modified rules, wrapped in
 </css>
 No explanations. No markdown. Nothing outside the <css></css> tags.`,
   },
+
+  deepseek: {
+    full: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+You will receive the current Additional CSS and a DOM structure summary.
+
+Return the COMPLETE rewritten CSS file with your changes applied — additions, edits, and deletions included.
+Wrap your response in <css> tags:
+<css>
+/* complete rewritten CSS here */
+</css>
+
+Rules:
+- Include every rule from the original file unless it should be removed.
+- Make the requested changes precisely — add, edit, or delete as needed.
+- Do not output anything outside the <css></css> tags.
+- No explanations, no markdown, no code fences.`,
+
+    patch: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+You will receive the current Additional CSS and a DOM structure summary.
+
+Return ONLY the CSS rules that need to be added or changed — not the entire file.
+Wrap your response in <css> tags:
+<css>
+/* only the new or modified rules */
+</css>
+
+Rules:
+- Include a rule in full if any part of it changes.
+- Do not include rules that are unchanged.
+- Do not output anything outside the <css></css> tags.
+- No explanations, no markdown, no code fences.`,
+  },
 };
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -160,7 +192,7 @@ async function generateCssStreaming(msg, port, signal) {
 
   const isReconsolidate = instructions === '__reconsolidate__';
   const isRevision      = history && history.length > 0;
-  const backend  = settings.aiBackend === 'ollama' ? 'ollama' : 'claude';
+  const backend  = settings.aiBackend === 'ollama' ? 'ollama' : settings.aiBackend === 'deepseek' ? 'deepseek' : 'claude';
   const cssMode  = isReconsolidate ? 'full' : (settings.cssMode || 'full');
   const systemPrompt = SYSTEM_PROMPTS[backend][cssMode];
 
@@ -243,7 +275,9 @@ async function generateCssStreaming(msg, port, signal) {
   // Stream
   let result = backend === 'ollama'
     ? await streamOllama(settings, messages, port, { systemPrompt, signal })
-    : await streamClaude(settings, messages, port, { systemPrompt, signal });
+    : backend === 'deepseek'
+      ? await streamDeepSeek(settings, messages, port, { systemPrompt, signal })
+      : await streamClaude(settings, messages, port, { systemPrompt, signal });
   let fullText = result.text;
   let inputTokens = result.inputTokens, outputTokens = result.outputTokens;
 
@@ -257,7 +291,9 @@ async function generateCssStreaming(msg, port, signal) {
     port.postMessage({ type: 'CSS_RETRY' });
     const retryResult = backend === 'ollama'
       ? await streamOllama(settings, retryMessages, port, { systemPrompt, signal })
-      : await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
+      : backend === 'deepseek'
+        ? await streamDeepSeek(settings, retryMessages, port, { systemPrompt, signal })
+        : await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
     fullText = retryResult.text;
     inputTokens  += retryResult.inputTokens;
     outputTokens += retryResult.outputTokens;
@@ -428,7 +464,9 @@ async function streamChatMessage(msg, port) {
 
   const chatResult = settings.aiBackend === 'ollama'
     ? await streamOllama(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' })
-    : await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
+    : settings.aiBackend === 'deepseek'
+      ? await streamDeepSeek(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' })
+      : await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
 
   const updatedHistory = [...messages, { role: 'assistant', content: chatResult.text }];
   port.postMessage({
@@ -591,6 +629,87 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
         if (event.done) {
           inputTokens  = event.prompt_eval_count || 0;
           outputTokens = event.eval_count || 0;
+        }
+      } catch (_) {}
+    }
+  }
+
+  return { text: fullText, inputTokens, outputTokens };
+}
+
+// ─── DeepSeek Streaming ───────────────────────────────────────────────────────
+// OpenAI-compatible SSE endpoint. DeepSeek is text-only — image blocks are
+// stripped from messages before sending. Token counts come from the final
+// chunk when stream_options.include_usage = true.
+
+async function streamDeepSeek(settings, messages, port, { systemPrompt, chunkType = 'CSS_CHUNK', signal } = {}) {
+  if (!settings.deepseekApiKey) throw new Error('DeepSeek API key not set. Go to the Setup tab.');
+
+  // Strip image content blocks — DeepSeek V4 is text-only
+  const textMessages = messages.map(m => {
+    if (!Array.isArray(m.content)) return m;
+    const text = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    return { role: m.role, content: text };
+  });
+
+  const resp = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    signal,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.deepseekApiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.deepseekModel || 'deepseek-v4-flash',
+      max_tokens: 16000,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...textMessages,
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`DeepSeek API error ${resp.status}: ${errText}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let buf = '';
+  let inputTokens = 0, outputTokens = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+      try {
+        const event = JSON.parse(data);
+        // Final chunk carries usage when stream_options.include_usage = true
+        if (event.usage) {
+          inputTokens  = event.usage.prompt_tokens    || 0;
+          outputTokens = event.usage.completion_tokens || 0;
+        }
+        const delta = event.choices?.[0]?.delta;
+        if (delta?.content) {
+          fullText += delta.content;
+          port.postMessage({ type: chunkType, text: delta.content });
+        }
+        if (event.choices?.[0]?.finish_reason === 'length') {
+          port.postMessage({
+            type: chunkType === 'CSS_CHUNK' ? 'CSS_DEBUG' : 'CHAT_DEBUG',
+            text: '⚠️ Response was cut off — hit max_tokens limit. Try a shorter instruction or switch to Patch mode.',
+          });
         }
       } catch (_) {}
     }
@@ -1116,6 +1235,8 @@ const DEFAULT_SETTINGS = {
   aiBackend: 'claude',
   claudeApiKey: '',
   claudeModel: 'claude-sonnet-4-6',
+  deepseekApiKey: '',
+  deepseekModel: 'deepseek-v4-flash',
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: 'llama3',
   ollamaVisionModel: 'llava',

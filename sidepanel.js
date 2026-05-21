@@ -1,13 +1,18 @@
 // Sync Styler — Side Panel UI
 
-// Hard-coded Claude model pricing (per 1M tokens)
+// Hard-coded model pricing (per 1M tokens)
 const CLAUDE_MODELS = [
   { id: 'claude-haiku-4-5',  label: 'Haiku 4.5',  inputPer1M: 1.00, outputPer1M: 5.00  },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.5', inputPer1M: 3.00, outputPer1M: 15.00 },
+  { id: 'claude-sonnet-4-5', label: 'Sonnet 4.5', inputPer1M: 3.00, outputPer1M: 15.00 },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', inputPer1M: 3.00, outputPer1M: 15.00 },
   { id: 'claude-opus-4-5',   label: 'Opus 4.5',   inputPer1M: 5.00, outputPer1M: 25.00 },
   { id: 'claude-opus-4-6',   label: 'Opus 4.6',   inputPer1M: 5.00, outputPer1M: 25.00 },
   { id: 'claude-opus-4-7',   label: 'Opus 4.7',   inputPer1M: 5.00, outputPer1M: 25.00 },
+];
+
+const DEEPSEEK_MODELS = [
+  { id: 'deepseek-v4-flash', label: 'V4 Flash', inputPer1M: 0.14,  outputPer1M: 0.28 },
+  { id: 'deepseek-v4-pro',   label: 'V4 Pro',   inputPer1M: 0.435, outputPer1M: 0.87 },
 ];
 
 const state = {
@@ -627,6 +632,8 @@ async function doSaveSettings() {
     aiBackend:        backend,
     claudeApiKey:     document.getElementById('claudeApiKey').value.trim(),
     claudeModel:      document.getElementById('claudeModel').value || 'claude-sonnet-4-6',
+    deepseekApiKey:   document.getElementById('deepseekApiKey').value.trim(),
+    deepseekModel:    document.getElementById('deepseekModel').value || 'deepseek-v4-flash',
     ollamaUrl:        document.getElementById('ollamaUrl').value.trim() || 'http://localhost:11434',
     ollamaModel:      document.getElementById('ollamaModel').value.trim() || 'llama3',
     ollamaVisionModel: document.getElementById('ollamaVisionModel').value.trim() || 'llava',
@@ -774,6 +781,10 @@ function applySettingsToForm(s) {
   const modelSelect = document.getElementById('claudeModel');
   modelSelect.value = s.claudeModel || 'claude-sonnet-4-6';
   if (!modelSelect.value) modelSelect.value = 'claude-sonnet-4-6';
+  document.getElementById('deepseekApiKey').value    = s.deepseekApiKey || '';
+  const dsModelSelect = document.getElementById('deepseekModel');
+  dsModelSelect.value = s.deepseekModel || 'deepseek-v4-flash';
+  if (!dsModelSelect.value) dsModelSelect.value = 'deepseek-v4-flash';
   document.getElementById('ollamaUrl').value         = s.ollamaUrl || 'http://localhost:11434';
   document.getElementById('ollamaModel').value       = s.ollamaModel || 'llama3';
   document.getElementById('ollamaVisionModel').value = s.ollamaVisionModel || 'llava';
@@ -799,6 +810,7 @@ function setBackend(value) {
     btn.classList.toggle('active', btn.dataset.value === value);
   });
   document.getElementById('claudeConfig').classList.toggle('hidden', value !== 'claude');
+  document.getElementById('deepseekConfig').classList.toggle('hidden', value !== 'deepseek');
   document.getElementById('ollamaConfig').classList.toggle('hidden', value !== 'ollama');
 }
 
@@ -845,6 +857,55 @@ function setupSetupTab() {
     try {
       const resp = await fetch('https://api.anthropic.com/v1/models', {
         headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      });
+      if (resp.ok) {
+        setStatusDot(dot, 'ok');
+        setVerifyMsg(msgEl, 'API key is valid', 'ok');
+      } else {
+        const body = await resp.json().catch(() => ({}));
+        setStatusDot(dot, 'fail');
+        setVerifyMsg(msgEl, body?.error?.message || `Error ${resp.status}`, 'fail');
+      }
+    } catch (e) {
+      setStatusDot(dot, 'fail');
+      setVerifyMsg(msgEl, e.message, 'fail');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ── DeepSeek: show/hide key ──
+  document.getElementById('deepseekKeyView').addEventListener('click', () => {
+    const input = document.getElementById('deepseekApiKey');
+    const btn   = document.getElementById('deepseekKeyView');
+    const show  = input.type === 'password';
+    input.type  = show ? 'text' : 'password';
+    btn.classList.toggle('active', show);
+  });
+
+  // ── DeepSeek: copy key ──
+  document.getElementById('deepseekKeyCopy').addEventListener('click', () => {
+    const key = document.getElementById('deepseekApiKey').value;
+    if (!key) return;
+    navigator.clipboard.writeText(key).catch(() => {});
+    const btn = document.getElementById('deepseekKeyCopy');
+    btn.classList.add('active');
+    setTimeout(() => btn.classList.remove('active'), 1200);
+  });
+
+  // ── DeepSeek: verify API key ──
+  document.getElementById('verifyDeepseekKey').addEventListener('click', async () => {
+    const key   = document.getElementById('deepseekApiKey').value.trim();
+    const dot   = document.getElementById('deepseekStatusDot');
+    const msgEl = document.getElementById('deepseekVerifyMsg');
+    const btn   = document.getElementById('verifyDeepseekKey');
+    if (!key) { setStatusDot(dot, 'fail'); setVerifyMsg(msgEl, 'Enter an API key first', 'fail'); return; }
+    setStatusDot(dot, 'pending');
+    msgEl.classList.add('hidden');
+    btn.disabled = true;
+    try {
+      const resp = await fetch('https://api.deepseek.com/models', {
+        headers: { 'Authorization': `Bearer ${key}` },
       });
       if (resp.ok) {
         setStatusDot(dot, 'ok');
@@ -1376,12 +1437,20 @@ function fmtTokens(n) {
 }
 
 function calcCost(inputTokens, outputTokens) {
-  const isClaudeBackend = document.querySelector('#backendToggle .toggle-opt.active')?.dataset.value === 'claude';
-  if (!isClaudeBackend) return null;
-  const modelId = document.getElementById('claudeModel')?.value;
-  const model = CLAUDE_MODELS.find(m => m.id === modelId);
-  if (!model) return null;
-  return (inputTokens * model.inputPer1M + outputTokens * model.outputPer1M) / 1_000_000;
+  const backend = document.querySelector('#backendToggle .toggle-opt.active')?.dataset.value;
+  if (backend === 'claude') {
+    const modelId = document.getElementById('claudeModel')?.value;
+    const model = CLAUDE_MODELS.find(m => m.id === modelId);
+    if (!model) return null;
+    return (inputTokens * model.inputPer1M + outputTokens * model.outputPer1M) / 1_000_000;
+  }
+  if (backend === 'deepseek') {
+    const modelId = document.getElementById('deepseekModel')?.value;
+    const model = DEEPSEEK_MODELS.find(m => m.id === modelId);
+    if (!model) return null;
+    return (inputTokens * model.inputPer1M + outputTokens * model.outputPer1M) / 1_000_000;
+  }
+  return null;
 }
 
 function fmtCost(cost) {
