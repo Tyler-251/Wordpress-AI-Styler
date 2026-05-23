@@ -143,6 +143,12 @@ async function handleMessage(msg) {
       const css = await readCssFromTab(custTab.id);
       return { chars: css ? css.length : 0 };
     }
+    case 'GET_CSS': {
+      const custTab = await findCustomizerTab();
+      if (!custTab) throw new Error('WordPress Customizer tab not found.\nOpen /wp-admin/customize.php in a tab.');
+      const css = await readCssFromTab(custTab.id);
+      return { css: css || '' };
+    }
     default: throw new Error('Unknown message type: ' + msg.type);
   }
 }
@@ -174,6 +180,34 @@ chrome.runtime.onConnect.addListener(port => {
         await streamChatMessage(msg, port);
       } catch (err) {
         try { port.postMessage({ type: 'CHAT_ERROR', error: err.message }); } catch (_) {}
+      }
+    });
+  }
+
+  if (port.name === 'css-smart-search') {
+    const controller = new AbortController();
+    port.onDisconnect.addListener(() => controller.abort());
+    port.onMessage.addListener(async msg => {
+      if (msg.type !== 'SMART_SEARCH') return;
+      try {
+        await streamSmartSearch(msg, port, controller.signal);
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        try { port.postMessage({ type: 'SMART_ERROR', error: err.message }); } catch (_) {}
+      }
+    });
+  }
+
+  if (port.name === 'css-inline-rewrite') {
+    const controller = new AbortController();
+    port.onDisconnect.addListener(() => controller.abort());
+    port.onMessage.addListener(async msg => {
+      if (msg.type !== 'INLINE_REWRITE') return;
+      try {
+        await streamInlineRewrite(msg, port, controller.signal);
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        try { port.postMessage({ type: 'INLINE_ERROR', error: err.message }); } catch (_) {}
       }
     });
   }
@@ -386,6 +420,14 @@ function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, screensh
 
 const SYSTEM_PROMPT_CHAT = `You are a CSS assistant embedded in a WordPress styling tool. Answer directly and briefly — no lists of suggestions, no asking the user to paste HTML, no emojis. When page context or CSS is provided in the conversation, use it. When writing CSS, use code blocks.`;
 
+const SYSTEM_PROMPT_INLINE_REWRITE = `You are a CSS expert. The user will give you a CSS snippet and an instruction to modify it.
+Return ONLY the rewritten CSS — no explanation, no markdown fences, no <css> tags, nothing else.
+Preserve the original indentation style. Change only what the instruction asks for.`;
+
+const SYSTEM_PROMPT_SMART_SEARCH = `You are a CSS expert. The user will give you their entire CSS file and a plain-language search query.
+Find the single CSS block or rule that best matches the query.
+Return ONLY that block copied exactly as it appears in the file — no explanation, no markdown, no extra text.`;
+
 async function streamChatMessage(msg, port) {
   const { message, history, siteTabId, includeDom = false, includeExistingCss = false, screenshotDataUrl, designRefDataUrl } = msg;
   const settings = await getSettings();
@@ -475,6 +517,47 @@ async function streamChatMessage(msg, port) {
     inputTokens: chatResult.inputTokens,
     outputTokens: chatResult.outputTokens,
   });
+}
+
+// ─── Smart Search ────────────────────────────────────────────────────────────
+
+async function streamSmartSearch(msg, port, signal) {
+  const { css, query } = msg;
+  const settings = await getSettings();
+  const backend = settings.aiBackend === 'ollama' ? 'ollama'
+    : settings.aiBackend === 'deepseek' ? 'deepseek' : 'claude';
+
+  const messages = [{ role: 'user', content: `CSS file:\n${css}\n\nFind: ${query}` }];
+  const opts = { systemPrompt: SYSTEM_PROMPT_SMART_SEARCH, chunkType: 'SMART_CHUNK', signal };
+
+  const result = backend === 'ollama'
+    ? await streamOllama(settings, messages, port, opts)
+    : backend === 'deepseek'
+      ? await streamDeepSeek(settings, messages, port, opts)
+      : await streamClaude(settings, messages, port, opts);
+
+  port.postMessage({ type: 'SMART_DONE', result: result.text.trim() });
+}
+
+// ─── Inline CSS Rewrite ───────────────────────────────────────────────────────
+
+async function streamInlineRewrite(msg, port, signal) {
+  const { selectedCss, instruction } = msg;
+  const settings = await getSettings();
+  const backend = settings.aiBackend === 'ollama' ? 'ollama'
+    : settings.aiBackend === 'deepseek' ? 'deepseek' : 'claude';
+
+  const userMessage = `CSS to rewrite:\n${selectedCss}\n\nInstruction: ${instruction}`;
+  const messages = [{ role: 'user', content: userMessage }];
+  const opts = { systemPrompt: SYSTEM_PROMPT_INLINE_REWRITE, chunkType: 'INLINE_CHUNK', signal };
+
+  const result = backend === 'ollama'
+    ? await streamOllama(settings, messages, port, opts)
+    : backend === 'deepseek'
+      ? await streamDeepSeek(settings, messages, port, opts)
+      : await streamClaude(settings, messages, port, opts);
+
+  port.postMessage({ type: 'INLINE_DONE', css: result.text.trim() });
 }
 
 // ─── Claude Streaming ─────────────────────────────────────────────────────────
@@ -1258,6 +1341,7 @@ const DEFAULT_SETTINGS = {
   cfClientId: '',
   cfClientSecret: '',
   autoPublish: false,
+  cssLineWrap: true,
   maxRollbacks: 100,
   cssMode: 'full',
 };

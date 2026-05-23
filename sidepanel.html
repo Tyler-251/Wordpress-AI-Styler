@@ -6,12 +6,31 @@
   <title>Sync Styler</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="libs/codemirror/codemirror.min.css">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
 
-  <!-- ─── Context Drawer (above tabs, shared by Helper & Agent) ─── -->
-  <div class="ctx-drawer" id="ctxDrawer">
+  <!-- ─── Main Bar: tabs + new chat + settings ─── -->
+  <div class="main-bar">
+    <div class="main-tabs">
+      <button class="main-tab active" data-panel="css">CSS</button>
+      <button class="main-tab" data-panel="helper">Chat</button>
+      <button class="main-tab" data-panel="agent">Agent</button>
+    </div>
+    <button class="icon-btn hidden" id="newChat" title="New chat">
+      <svg viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="openSettings" title="Settings">
+      <svg viewBox="0 0 16 16" fill="none">
+        <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.42 1.42M11.53 11.53l1.42 1.42M3.05 12.95l1.42-1.42M11.53 4.47l1.42-1.42" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ─── Context Drawer (below tabs, shown on Chat & Agent) ─── -->
+  <div class="ctx-drawer hidden" id="ctxDrawer">
     <button class="ctx-drawer-toggle" id="ctxDrawerToggle">
       <svg class="ctx-drawer-chevron" id="ctxDrawerChevron" viewBox="0 0 12 12" fill="none">
         <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -50,23 +69,6 @@
 
     </div>
     <input type="file" id="designRefInput" accept="image/*" class="visually-hidden">
-  </div>
-
-  <!-- ─── Main Bar: tabs + new chat + settings ─── -->
-  <div class="main-bar">
-    <div class="main-tabs">
-      <button class="main-tab active" data-panel="helper">Helper</button>
-      <button class="main-tab" data-panel="agent">Agent</button>
-    </div>
-    <button class="icon-btn" id="newChat" title="New chat">
-      <svg viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-    </button>
-    <button class="icon-btn" id="openSettings" title="Settings">
-      <svg viewBox="0 0 16 16" fill="none">
-        <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/>
-        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.42 1.42M11.53 11.53l1.42 1.42M3.05 12.95l1.42-1.42M11.53 4.47l1.42-1.42" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-      </svg>
-    </button>
   </div>
 
   <!-- ─── Agent Panel ─── -->
@@ -145,7 +147,7 @@
   </div>
 
   <!-- ─── Helper Panel ─── -->
-  <div class="helper-panel" id="helperPanel">
+  <div class="helper-panel hidden" id="helperPanel">
     <div class="chat-messages" id="chatMessages"></div>
     <div class="chat-input-area">
 
@@ -173,6 +175,51 @@
 
       <span class="chat-token-count" id="chatTokenCount"></span>
 
+    </div>
+  </div>
+
+  <!-- ─── CSS IDE Panel ─── -->
+  <div class="css-ide-panel" id="cssIdePanel">
+    <div class="css-ide-toolbar">
+      <button class="btn-secondary btn-sm" id="cssIdeRefresh" title="Reload CSS from site">
+        <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
+          <path d="M12 7A5 5 0 1 1 7 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M9 2h3v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Reload
+      </button>
+      <button class="btn-secondary btn-sm" id="cssIdeSearchBtn" title="Find (Ctrl+F)">
+        <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
+          <circle cx="5.5" cy="5.5" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8.5 8.5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        Find
+      </button>
+      <span class="css-ide-meta" id="cssIdeMeta"></span>
+    </div>
+    <div class="css-ide-search hidden" id="cssIdeSearch">
+      <button class="css-ide-search-ai-toggle" id="cssIdeSearchAiToggle" title="Toggle AI smart search">✦</button>
+      <input type="text" class="css-ide-search-input" id="cssIdeSearchInput" placeholder="Find in CSS…" spellcheck="false" autocomplete="off">
+      <span class="css-ide-search-count" id="cssIdeSearchCount"></span>
+      <button class="css-ide-search-nav" id="cssIdeSearchPrev" title="Previous (Shift+Enter)">
+        <svg viewBox="0 0 10 10" fill="none"><path d="M2 6.5l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="css-ide-search-nav" id="cssIdeSearchNext" title="Next (Enter)">
+        <svg viewBox="0 0 10 10" fill="none"><path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="css-ide-search-close" id="cssIdeSearchClose" title="Close (Esc)">
+        <svg viewBox="0 0 10 10" fill="none"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="css-ide-editor-wrap" id="cssIdeEditorWrap">
+      <textarea id="cssIdeTextarea" class="visually-hidden"></textarea>
+    </div>
+    <div class="css-ide-footer">
+      <span class="css-ide-status" id="cssIdeStatus"></span>
+      <div class="css-ide-actions">
+        <button class="btn-secondary btn-sm" id="cssIdeDeploy">Deploy</button>
+        <button class="btn-primary btn-sm" id="cssIdePublish">Publish</button>
+      </div>
     </div>
   </div>
 
@@ -218,6 +265,15 @@
           <input type="checkbox" id="autoPublish" class="visually-hidden">
           <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
           <span class="settings-toggle-label">Auto-publish after applying CSS</span>
+        </label>
+      </div>
+
+      <!-- CSS line wrap toggle -->
+      <div class="field-group">
+        <label class="settings-toggle-row">
+          <input type="checkbox" id="cssLineWrap" class="visually-hidden" checked>
+          <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+          <span class="settings-toggle-label">Wrap long lines in CSS editor</span>
         </label>
       </div>
 
@@ -420,6 +476,9 @@
     </div>
   </div>
 
+  <script src="libs/codemirror/codemirror.min.js"></script>
+  <script src="libs/codemirror/css.min.js"></script>
+  <script src="libs/codemirror/searchcursor.min.js"></script>
   <script src="tools-presets.js"></script>
   <script src="sidepanel.js"></script>
 </body>

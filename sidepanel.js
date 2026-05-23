@@ -67,6 +67,8 @@ async function init() {
   setupWorkflowTab();
   setupScopeButtons();
   setupHelper();
+  setupCssIde();
+  loadCssIde();
   setupTabMismatch();
   listenForTabChanges();
 }
@@ -92,7 +94,10 @@ function setupMainTabs() {
       document.querySelectorAll('.main-tab').forEach(b => b.classList.toggle('active', b === btn));
       document.getElementById('workflowPanel').classList.toggle('hidden', panel !== 'agent');
       document.getElementById('helperPanel').classList.toggle('hidden', panel !== 'helper');
+      document.getElementById('cssIdePanel').classList.toggle('hidden', panel !== 'css');
       document.getElementById('newChat').classList.toggle('hidden', panel !== 'helper');
+      document.getElementById('ctxDrawer').classList.toggle('hidden', panel === 'css');
+      if (panel === 'css') loadCssIde();
     });
   });
 
@@ -643,6 +648,7 @@ async function doSaveSettings() {
     cfClientId:       cfEnabled ? document.getElementById('cfClientId').value.trim()   : '',
     cfClientSecret:   cfEnabled ? document.getElementById('cfClientSecret').value.trim() : '',
     autoPublish:      document.getElementById('autoPublish').checked,
+    cssLineWrap:      document.getElementById('cssLineWrap').checked,
     maxRollbacks:     100,
     cssMode,
   };
@@ -822,6 +828,9 @@ function applySettingsToForm(s) {
   document.getElementById('cfClientId').value        = s.cfClientId || '';
   document.getElementById('cfClientSecret').value    = s.cfClientSecret || '';
   document.getElementById('autoPublish').checked     = !!s.autoPublish;
+  const lineWrap = s.cssLineWrap !== false; // default true
+  document.getElementById('cssLineWrap').checked = lineWrap;
+  if (cssIdeEditor) cssIdeEditor.setOption('lineWrapping', lineWrap);
   // CF enabled: restore from saved value, or infer from non-empty credentials
   const cfEnabled = s.cfEnabled || !!(s.cfClientId || s.cfClientSecret);
   document.getElementById('cfEnabled').checked = cfEnabled;
@@ -978,6 +987,11 @@ function setupSetupTab() {
     } finally {
       btn.disabled = false;
     }
+  });
+
+  // ── CSS line wrap toggle ──
+  document.getElementById('cssLineWrap').addEventListener('change', e => {
+    if (cssIdeEditor) cssIdeEditor.setOption('lineWrapping', e.target.checked);
   });
 
   // ── CF toggle ──
@@ -1504,6 +1518,524 @@ function showError(msg) {
 
 function clearError() {
   document.getElementById('errorBox').classList.add('hidden');
+}
+
+// ─── CSS IDE ──────────────────────────────────────────────────────────────────
+
+let cssIdeEditor = null;       // CodeMirror instance
+let cssIdeColorMarks = [];     // active bookmark widgets for color swatches
+let cssIdeColorTimer = null;   // debounce timer
+
+function setupCssIde() {
+  const textarea = document.getElementById('cssIdeTextarea');
+
+  cssIdeEditor = CodeMirror.fromTextArea(textarea, {
+    mode: 'css',
+    theme: 'sync-dark',
+    lineNumbers: true,
+    lineWrapping: true,
+    indentWithTabs: false,
+    indentUnit: 2,
+    tabSize: 2,
+    smartIndent: true,
+    matchBrackets: true,
+    autofocus: false,
+    extraKeys: { Tab: cm => cm.execCommand('indentMore'), 'Shift-Tab': cm => cm.execCommand('indentLess') },
+  });
+
+  // Refresh editor size when it becomes visible
+  const observer = new MutationObserver(() => {
+    if (!document.getElementById('cssIdePanel').classList.contains('hidden')) {
+      cssIdeEditor.refresh();
+    }
+  });
+  observer.observe(document.getElementById('cssIdePanel'), { attributes: true, attributeFilter: ['class'] });
+
+  // Update meta (line/col/char) on cursor move
+  cssIdeEditor.on('cursorActivity', updateCssIdeMeta);
+
+  // Color swatches on change (debounced)
+  cssIdeEditor.on('changes', () => {
+    clearTimeout(cssIdeColorTimer);
+    cssIdeColorTimer = setTimeout(renderColorSwatches, 300);
+  });
+
+  document.getElementById('cssIdeRefresh').addEventListener('click', loadCssIde);
+  document.getElementById('cssIdeDeploy').addEventListener('click', () => deployOrPublishCss(false));
+  document.getElementById('cssIdePublish').addEventListener('click', () => deployOrPublishCss(true));
+
+  // Search
+  document.getElementById('cssIdeSearchBtn').addEventListener('click', openCssSearch);
+  document.getElementById('cssIdeSearchPrev').addEventListener('click', prevCssMatch);
+  document.getElementById('cssIdeSearchNext').addEventListener('click', nextCssMatch);
+  document.getElementById('cssIdeSearchClose').addEventListener('click', closeCssSearch);
+  document.getElementById('cssIdeSearchAiToggle').addEventListener('click', toggleCssSearchAiMode);
+
+  const searchInput = document.getElementById('cssIdeSearchInput');
+  searchInput.addEventListener('input', () => { if (!cssSearchAiMode) runCssSearch(); });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (cssSearchAiMode) runSmartSearch();
+      else e.shiftKey ? prevCssMatch() : nextCssMatch();
+    }
+    if (e.key === 'Escape') { e.preventDefault(); closeCssSearch(); }
+  });
+
+  cssIdeEditor.addKeyMap({
+    'Ctrl-F': () => { openCssSearch(); return true; },
+    'Cmd-F':  () => { openCssSearch(); return true; },
+    'Ctrl-I': () => { openInlineChat(); return true; },
+    'Cmd-I':  () => { openInlineChat(); return true; },
+  });
+}
+
+// ── CSS IDE Search ────────────────────────────────────────────────────────────
+
+let cssIdeSearchMatches = [];
+let cssIdeSearchIndex   = -1;
+let cssIdeSearchMarks   = [];
+let cssSearchAiMode     = false;
+let cssSmartSearchPort  = null;
+
+function openCssSearch() {
+  document.getElementById('cssIdeSearch').classList.remove('hidden');
+  const input = document.getElementById('cssIdeSearchInput');
+  input.focus();
+  input.select();
+  runCssSearch();
+}
+
+function closeCssSearch() {
+  document.getElementById('cssIdeSearch').classList.add('hidden');
+  clearCssSearchMarks();
+  document.getElementById('cssIdeSearchCount').textContent = '';
+  cssIdeEditor.focus();
+}
+
+function clearCssSearchMarks() {
+  cssIdeSearchMarks.forEach(m => m.clear());
+  cssIdeSearchMarks   = [];
+  cssIdeSearchMatches = [];
+  cssIdeSearchIndex   = -1;
+}
+
+function runCssSearch() {
+  clearCssSearchMarks();
+  const query   = document.getElementById('cssIdeSearchInput').value;
+  const countEl = document.getElementById('cssIdeSearchCount');
+  if (!query) { countEl.textContent = ''; return; }
+
+  const cursor = cssIdeEditor.getSearchCursor(query, CodeMirror.Pos(0, 0), { caseFold: true });
+  while (cursor.findNext()) {
+    const from = cursor.from();
+    const to   = cursor.to();
+    cssIdeSearchMatches.push({ from, to });
+    cssIdeSearchMarks.push(cssIdeEditor.markText(from, to, { className: 'cm-search-match' }));
+  }
+
+  if (!cssIdeSearchMatches.length) {
+    countEl.textContent = 'No matches';
+    countEl.classList.add('css-ide-search-count-none');
+    return;
+  }
+  countEl.classList.remove('css-ide-search-count-none');
+  cssIdeSearchIndex = 0;
+  jumpToMatch();
+}
+
+function nextCssMatch() {
+  if (!cssIdeSearchMatches.length) return;
+  cssIdeSearchIndex = (cssIdeSearchIndex + 1) % cssIdeSearchMatches.length;
+  jumpToMatch();
+}
+
+function prevCssMatch() {
+  if (!cssIdeSearchMatches.length) return;
+  cssIdeSearchIndex = (cssIdeSearchIndex - 1 + cssIdeSearchMatches.length) % cssIdeSearchMatches.length;
+  jumpToMatch();
+}
+
+function jumpToMatch() {
+  const match = cssIdeSearchMatches[cssIdeSearchIndex];
+  cssIdeEditor.setSelection(match.from, match.to);
+  cssIdeEditor.scrollIntoView({ from: match.from, to: match.to }, 80);
+  document.getElementById('cssIdeSearchCount').textContent =
+    `${cssIdeSearchIndex + 1} / ${cssIdeSearchMatches.length}`;
+}
+
+function toggleCssSearchAiMode() {
+  cssSearchAiMode = !cssSearchAiMode;
+  const btn   = document.getElementById('cssIdeSearchAiToggle');
+  const input = document.getElementById('cssIdeSearchInput');
+  const navs  = document.querySelectorAll('.css-ide-search-nav');
+
+  btn.classList.toggle('css-ide-search-ai-active', cssSearchAiMode);
+  input.placeholder = cssSearchAiMode ? 'Describe what you\'re looking for…' : 'Find in CSS…';
+  navs.forEach(n => n.classList.toggle('hidden', cssSearchAiMode));
+
+  // Clear any existing text-search state when switching modes
+  clearCssSearchMarks();
+  document.getElementById('cssIdeSearchCount').textContent = '';
+  document.getElementById('cssIdeSearchCount').classList.remove('css-ide-search-count-none');
+  input.value = '';
+  input.focus();
+}
+
+function runSmartSearch() {
+  const query   = document.getElementById('cssIdeSearchInput').value.trim();
+  const countEl = document.getElementById('cssIdeSearchCount');
+  if (!query) return;
+
+  // Abort any in-flight smart search
+  if (cssSmartSearchPort) { try { cssSmartSearchPort.disconnect(); } catch (_) {} cssSmartSearchPort = null; }
+  clearCssSearchMarks();
+
+  countEl.textContent = '✦ Searching…';
+  countEl.classList.remove('css-ide-search-count-none');
+  document.getElementById('cssIdeSearchInput').disabled = true;
+
+  const fullCss = cssIdeEditor.getValue();
+  const port    = chrome.runtime.connect({ name: 'css-smart-search' });
+  cssSmartSearchPort = port;
+
+  port.onMessage.addListener(msg => {
+    if (msg.type === 'SMART_DONE') {
+      cssSmartSearchPort = null;
+      document.getElementById('cssIdeSearchInput').disabled = false;
+      highlightSmartResult(msg.result, countEl);
+
+    } else if (msg.type === 'SMART_ERROR') {
+      cssSmartSearchPort = null;
+      document.getElementById('cssIdeSearchInput').disabled = false;
+      countEl.textContent = msg.error;
+      countEl.classList.add('css-ide-search-count-none');
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    cssSmartSearchPort = null;
+    document.getElementById('cssIdeSearchInput').disabled = false;
+  });
+
+  port.postMessage({ type: 'SMART_SEARCH', css: fullCss, query });
+}
+
+function highlightSmartResult(resultCss, countEl) {
+  // Strip any accidental fences the AI may have added
+  const cleaned = resultCss
+    .replace(/^```[\w]*\r?\n?/m, '').replace(/\r?\n?```\s*$/m, '').trim();
+
+  // Use the first non-empty, non-comment line as the search anchor
+  const anchor = cleaned.split('\n')
+    .map(l => l.trim())
+    .find(l => l && !l.startsWith('/*') && !l.startsWith('//'));
+
+  if (!anchor) {
+    countEl.textContent = 'Not found';
+    countEl.classList.add('css-ide-search-count-none');
+    return;
+  }
+
+  const cursor = cssIdeEditor.getSearchCursor(anchor, CodeMirror.Pos(0, 0), { caseFold: true });
+  if (!cursor.findNext()) {
+    countEl.textContent = 'Not found';
+    countEl.classList.add('css-ide-search-count-none');
+    return;
+  }
+
+  const from = cursor.from();
+
+  // Walk forward from anchor to find the end of the full block (matching braces)
+  const to = findBlockEnd(from);
+
+  cssIdeSearchMarks.push(cssIdeEditor.markText(from, to, { className: 'cm-search-match' }));
+  cssIdeEditor.setSelection(from, to);
+  cssIdeEditor.scrollIntoView({ from, to }, 80);
+  countEl.textContent = '✦ Found';
+  countEl.classList.remove('css-ide-search-count-none');
+}
+
+function findBlockEnd(from) {
+  const doc   = cssIdeEditor.getDoc();
+  const total = doc.lineCount();
+  let depth = 0;
+  let started = false;
+
+  for (let ln = from.line; ln < total; ln++) {
+    const text     = doc.getLine(ln);
+    const startCh  = ln === from.line ? from.ch : 0;
+    for (let ch = startCh; ch < text.length; ch++) {
+      if (text[ch] === '{') { depth++; started = true; }
+      else if (text[ch] === '}') {
+        depth--;
+        if (started && depth <= 0) return { line: ln, ch: ch + 1 };
+      }
+    }
+  }
+  // Fallback: end of anchor line
+  return { line: from.line, ch: doc.getLine(from.line).length };
+}
+
+async function loadCssIde() {
+  setCssIdeStatus('Loading…');
+  try {
+    const resp = await send({ type: 'GET_CSS' });
+    cssIdeEditor.setValue(resp.css || '');
+    cssIdeEditor.clearHistory();
+    cssIdeEditor.refresh();
+    renderColorSwatches();
+    updateCssIdeMeta();
+    setCssIdeStatus('');
+  } catch (e) {
+    setCssIdeStatus(e.message, true);
+  }
+}
+
+async function deployOrPublishCss(publish) {
+  const btn = publish ? document.getElementById('cssIdePublish') : document.getElementById('cssIdeDeploy');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = publish ? 'Publishing…' : 'Deploying…';
+  setCssIdeStatus('');
+  try {
+    await send({ type: 'WRITE_CSS', css: cssIdeEditor.getValue(), autoPublish: publish });
+    setCssIdeStatus(publish ? 'Published ✓' : 'Deployed ✓');
+    setTimeout(() => setCssIdeStatus(''), 3000);
+  } catch (e) {
+    setCssIdeStatus(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+function updateCssIdeMeta() {
+  const cursor = cssIdeEditor.getCursor();
+  const chars  = cssIdeEditor.getValue().length;
+  const lines  = cssIdeEditor.lineCount();
+  document.getElementById('cssIdeMeta').textContent =
+    `Ln ${cursor.line + 1}, Col ${cursor.ch + 1}  ·  ${lines} lines  ·  ${chars} chars`;
+}
+
+function setCssIdeStatus(msg, isError) {
+  const el = document.getElementById('cssIdeStatus');
+  el.textContent = msg;
+  el.classList.toggle('css-ide-status-error', !!isError);
+}
+
+// ── Color swatches ────────────────────────────────────────────────────────────
+
+const CSS_NAMED_COLORS = new Set([
+  'aliceblue','antiquewhite','aqua','aquamarine','azure','beige','bisque','black','blanchedalmond',
+  'blue','blueviolet','brown','burlywood','cadetblue','chartreuse','chocolate','coral',
+  'cornflowerblue','cornsilk','crimson','cyan','darkblue','darkcyan','darkgoldenrod','darkgray',
+  'darkgreen','darkgrey','darkkhaki','darkmagenta','darkolivegreen','darkorange','darkorchid',
+  'darkred','darksalmon','darkseagreen','darkslateblue','darkslategray','darkslategrey',
+  'darkturquoise','darkviolet','deeppink','deepskyblue','dimgray','dimgrey','dodgerblue',
+  'firebrick','floralwhite','forestgreen','fuchsia','gainsboro','ghostwhite','gold','goldenrod',
+  'gray','green','greenyellow','grey','honeydew','hotpink','indianred','indigo','ivory','khaki',
+  'lavender','lavenderblush','lawngreen','lemonchiffon','lightblue','lightcoral','lightcyan',
+  'lightgoldenrodyellow','lightgray','lightgreen','lightgrey','lightpink','lightsalmon',
+  'lightseagreen','lightskyblue','lightslategray','lightslategrey','lightsteelblue','lightyellow',
+  'lime','limegreen','linen','magenta','maroon','mediumaquamarine','mediumblue','mediumorchid',
+  'mediumpurple','mediumseagreen','mediumslateblue','mediumspringgreen','mediumturquoise',
+  'mediumvioletred','midnightblue','mintcream','mistyrose','moccasin','navajowhite','navy',
+  'oldlace','olive','olivedrab','orange','orangered','orchid','palegoldenrod','palegreen',
+  'paleturquoise','palevioletred','papayawhip','peachpuff','peru','pink','plum','powderblue',
+  'purple','rebeccapurple','red','rosybrown','royalblue','saddlebrown','salmon','sandybrown',
+  'seagreen','seashell','sienna','silver','skyblue','slateblue','slategray','slategrey','snow',
+  'springgreen','steelblue','tan','teal','thistle','tomato','turquoise','violet','wheat',
+  'white','whitesmoke','yellow','yellowgreen',
+]);
+
+function parseColorValue(token) {
+  const t = token.trim().toLowerCase();
+  if (/^#([0-9a-f]{3,8})$/.test(t)) return t;
+  if (/^rgba?\s*\(/.test(t) || /^hsla?\s*\(/.test(t)) return t;
+  if (CSS_NAMED_COLORS.has(t)) return t;
+  return null;
+}
+
+function renderColorSwatches() {
+  if (!cssIdeEditor) return;
+
+  // Clear previous widgets
+  cssIdeColorMarks.forEach(m => m.clear());
+  cssIdeColorMarks = [];
+
+  const totalLines = cssIdeEditor.lineCount();
+  for (let ln = 0; ln < totalLines; ln++) {
+    const tokens = cssIdeEditor.getLineTokens(ln);
+    for (const tok of tokens) {
+      const color = parseColorValue(tok.string);
+      if (!color) continue;
+
+      const swatch = document.createElement('span');
+      swatch.className = 'cm-color-swatch';
+      swatch.style.background = color;
+
+      const mark = cssIdeEditor.setBookmark(
+        { line: ln, ch: tok.start },
+        { widget: swatch, insertLeft: true }
+      );
+      mark._isSwatch = true;
+      cssIdeColorMarks.push(mark);
+    }
+  }
+}
+
+// ─── CSS Inline Chat ──────────────────────────────────────────────────────────
+
+let cssInlineChat = null; // { lineWidget, port, from, to, el }
+
+function openInlineChat() {
+  const sel = cssIdeEditor.getSelection();
+  if (!sel.trim()) return; // nothing selected
+
+  // Close any existing inline chat first
+  closeInlineChat();
+
+  const from = cssIdeEditor.getCursor('from');
+  const to   = cssIdeEditor.getCursor('to');
+
+  const el = document.createElement('div');
+  el.className = 'css-inline-chat';
+  renderInlineChatInput(el);
+
+  const lineWidget = cssIdeEditor.addLineWidget(to.line, el, {
+    above: false,
+    handleMouseEvents: true,
+    noHScroll: true,
+  });
+
+  cssInlineChat = { lineWidget, port: null, from, to, el, selectedCss: sel };
+
+  // Focus the input after the widget is inserted
+  requestAnimationFrame(() => {
+    const input = el.querySelector('.css-inline-chat-input');
+    if (input) input.focus();
+  });
+}
+
+function closeInlineChat() {
+  if (!cssInlineChat) return;
+  if (cssInlineChat.port) { try { cssInlineChat.port.disconnect(); } catch (_) {} }
+  cssInlineChat.lineWidget.clear();
+  cssInlineChat = null;
+  cssIdeEditor.focus();
+}
+
+function renderInlineChatInput(el) {
+  el.innerHTML = `
+    <div class="css-inline-chat-row">
+      <span class="css-inline-chat-icon">✦</span>
+      <input class="css-inline-chat-input" type="text" placeholder="Rewrite instruction…" spellcheck="false" autocomplete="off">
+      <button class="css-inline-chat-send" title="Send (Enter)">
+        <svg viewBox="0 0 14 14" fill="none" width="11" height="11">
+          <path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="css-inline-chat-dismiss" title="Dismiss (Esc)">
+        <svg viewBox="0 0 10 10" fill="none" width="10" height="10">
+          <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  `;
+
+  const input = el.querySelector('.css-inline-chat-input');
+  el.querySelector('.css-inline-chat-send').addEventListener('click', () => submitInlineChat(input.value));
+  el.querySelector('.css-inline-chat-dismiss').addEventListener('click', closeInlineChat);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); submitInlineChat(input.value); }
+    if (e.key === 'Escape') { e.preventDefault(); closeInlineChat(); }
+  });
+}
+
+function submitInlineChat(instruction) {
+  if (!instruction.trim() || !cssInlineChat) return;
+
+  const { el, selectedCss } = cssInlineChat;
+  let buffer = '';
+
+  // Swap to streaming phase
+  el.innerHTML = `
+    <div class="css-inline-chat-row css-inline-chat-streaming-row">
+      <span class="css-inline-chat-icon css-inline-chat-icon-spin">✦</span>
+      <span class="css-inline-chat-label">Rewriting…</span>
+      <button class="css-inline-chat-dismiss" title="Stop">
+        <svg viewBox="0 0 10 10" fill="none" width="10" height="10">
+          <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <pre class="css-inline-chat-preview"></pre>
+  `;
+  el.querySelector('.css-inline-chat-dismiss').addEventListener('click', closeInlineChat);
+  cssInlineChat.lineWidget.changed();
+
+  const preview = el.querySelector('.css-inline-chat-preview');
+  const port = chrome.runtime.connect({ name: 'css-inline-rewrite' });
+  cssInlineChat.port = port;
+
+  port.onMessage.addListener(msg => {
+    if (msg.type === 'INLINE_CHUNK') {
+      buffer += msg.text;
+      preview.textContent = cleanInlineCss(buffer);
+      cssInlineChat.lineWidget.changed();
+
+    } else if (msg.type === 'INLINE_DONE') {
+      const finalCss = cleanInlineCss(msg.css || buffer);
+      cssInlineChat.port = null;
+      renderInlineChatResult(el, finalCss);
+
+    } else if (msg.type === 'INLINE_ERROR') {
+      el.querySelector('.css-inline-chat-label').textContent = msg.error;
+      el.querySelector('.css-inline-chat-label').style.color = 'var(--danger)';
+      el.querySelector('.css-inline-chat-icon').classList.remove('css-inline-chat-icon-spin');
+      cssInlineChat.port = null;
+      cssInlineChat.lineWidget.changed();
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (cssInlineChat) cssInlineChat.port = null;
+  });
+
+  port.postMessage({ type: 'INLINE_REWRITE', selectedCss, instruction });
+}
+
+function renderInlineChatResult(el, finalCss) {
+  el.innerHTML = `
+    <div class="css-inline-chat-row css-inline-chat-done-row">
+      <span class="css-inline-chat-icon">✦</span>
+      <span class="css-inline-chat-label css-inline-chat-label-done">Done</span>
+      <button class="css-inline-chat-apply btn-primary btn-sm">Apply</button>
+      <button class="css-inline-chat-dismiss btn-secondary btn-sm">Discard</button>
+    </div>
+    <pre class="css-inline-chat-preview">${escapeHtml(finalCss)}</pre>
+  `;
+  el.querySelector('.css-inline-chat-apply').addEventListener('click', () => applyInlineRewrite(finalCss));
+  el.querySelector('.css-inline-chat-dismiss').addEventListener('click', closeInlineChat);
+  cssInlineChat.lineWidget.changed();
+}
+
+function applyInlineRewrite(newCss) {
+  if (!cssInlineChat) return;
+  const { from, to } = cssInlineChat;
+  closeInlineChat();
+  cssIdeEditor.replaceRange(newCss, from, to);
+  cssIdeEditor.focus();
+}
+
+function cleanInlineCss(text) {
+  return text
+    .replace(/<css>\s*/gi, '')
+    .replace(/\s*<\/css>/gi, '')
+    .replace(/^```[\w]*\r?\n?/m, '')
+    .replace(/\r?\n?```\s*$/m, '')
+    .trim();
 }
 
 // ─── Tab Mismatch ─────────────────────────────────────────────────────────────
