@@ -149,6 +149,14 @@ async function handleMessage(msg) {
       const css = await readCssFromTab(custTab.id);
       return { css: css || '' };
     }
+    case 'GET_DOCS': {
+      const data = await chrome.storage.local.get('userDocs');
+      return { docs: data.userDocs || [] };
+    }
+    case 'SAVE_DOCS': {
+      await chrome.storage.local.set({ userDocs: msg.docs });
+      return { success: true };
+    }
     default: throw new Error('Unknown message type: ' + msg.type);
   }
 }

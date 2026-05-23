@@ -1549,6 +1549,146 @@ select.select-input option {
 }
 .btn-text-muted:hover { color: var(--text-primary); background: var(--bg-surface-hover); }
 
+/* ─── Docs Panel ─────────────────────────────────────────────────────────────── */
+
+.docs-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.docs-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.docs-section-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.docs-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 6px 2px;
+}
+
+.docs-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  margin-bottom: 5px;
+}
+.docs-item:last-child { margin-bottom: 0; }
+
+.docs-item-pinned {
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: background 0.15s, border-color 0.15s;
+}
+.docs-item-pinned:hover { background: var(--bg-surface-hover); border-color: var(--accent); }
+
+.docs-item-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  color: var(--text-primary);
+  overflow: hidden;
+}
+.docs-item-link:hover .docs-item-title { color: var(--accent); }
+
+.docs-item-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.docs-type-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  opacity: 0.75;
+}
+
+.docs-item-arrow {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.docs-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.docs-edit-btn,
+.docs-delete-btn {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  color: var(--text-secondary);
+  font-family: inherit;
+}
+.docs-edit-btn:hover   { background: var(--bg-surface-hover); color: var(--text-primary); }
+.docs-delete-btn:hover { background: #fee2e2; color: #dc2626; border-color: #fca5a5; }
+
+/* Add / edit form */
+.docs-add-form {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.docs-form-input {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.docs-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.docs-footer {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
 /* ─── CSS IDE Panel ───────────────────────────────────────────────────────────── */
 
 .css-ide-panel {
@@ -1848,8 +1988,8 @@ select.select-input option {
   border-left: 2px solid #aeafad;
 }
 
-.cm-s-sync-dark .CodeMirror-selected { background: rgba(22, 124, 255, 0.15) !important; }
-.cm-s-sync-dark .CodeMirror-focused .CodeMirror-selected { background: rgba(22, 124, 255, 0.15) !important; }
+.cm-s-sync-dark .CodeMirror-selected { background: rgba(22, 124, 255, 0.35) !important; }
+.cm-s-sync-dark .CodeMirror-focused .CodeMirror-selected { background: rgba(22, 124, 255, 0.45) !important; }
 
 /* override native browser selection at every depth — !important beats codemirror.min.css */
 .cm-s-sync-dark .CodeMirror *::selection { background: rgba(22, 124, 255, 0.2) !important; color: inherit !important; }

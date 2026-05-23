@@ -69,6 +69,7 @@ async function init() {
   setupHelper();
   setupCssIde();
   loadCssIde();
+  setupDocsTab();
   setupTabMismatch();
   listenForTabChanges();
 }
@@ -95,8 +96,9 @@ function setupMainTabs() {
       document.getElementById('workflowPanel').classList.toggle('hidden', panel !== 'agent');
       document.getElementById('helperPanel').classList.toggle('hidden', panel !== 'helper');
       document.getElementById('cssIdePanel').classList.toggle('hidden', panel !== 'css');
+      document.getElementById('docsPanel').classList.toggle('hidden', panel !== 'docs');
       document.getElementById('newChat').classList.toggle('hidden', panel !== 'helper');
-      document.getElementById('ctxDrawer').classList.toggle('hidden', panel === 'css');
+      document.getElementById('ctxDrawer').classList.toggle('hidden', panel === 'css' || panel === 'docs');
       if (panel === 'css') loadCssIde();
     });
   });
@@ -1561,8 +1563,28 @@ function setupCssIde() {
   });
 
   document.getElementById('cssIdeRefresh').addEventListener('click', loadCssIde);
-  document.getElementById('cssIdeDeploy').addEventListener('click', () => deployOrPublishCss(false));
   document.getElementById('cssIdePublish').addEventListener('click', () => deployOrPublishCss(true));
+  document.getElementById('cssIdeReloadPage').addEventListener('click', () => {
+    if (state.siteTabId) chrome.tabs.reload(state.siteTabId);
+  });
+
+  // Auto-write to Customizer field on every edit (debounced)
+  let cssIdeAutoWriteTimer = null;
+  cssIdeEditor.on('changes', (cm, changes) => {
+    // Ignore changes that came from setValue (initial load / reload)
+    if (changes.every(c => c.origin === 'setValue')) return;
+    clearTimeout(cssIdeAutoWriteTimer);
+    setCssIdeStatus('');
+    cssIdeAutoWriteTimer = setTimeout(async () => {
+      try {
+        await send({ type: 'WRITE_CSS', css: cssIdeEditor.getValue(), autoPublish: false });
+        setCssIdeStatus('Synced ✓');
+        setTimeout(() => setCssIdeStatus(''), 2000);
+      } catch (_) {
+        // Silently ignore — Customizer tab may not be open
+      }
+    }, 800);
+  });
 
   // Search
   document.getElementById('cssIdeSearchBtn').addEventListener('click', openCssSearch);
@@ -1793,14 +1815,14 @@ async function loadCssIde() {
 }
 
 async function deployOrPublishCss(publish) {
-  const btn = publish ? document.getElementById('cssIdePublish') : document.getElementById('cssIdeDeploy');
+  const btn = document.getElementById('cssIdePublish');
   const origText = btn.textContent;
   btn.disabled = true;
-  btn.textContent = publish ? 'Publishing…' : 'Deploying…';
+  btn.textContent = 'Publishing…';
   setCssIdeStatus('');
   try {
     await send({ type: 'WRITE_CSS', css: cssIdeEditor.getValue(), autoPublish: publish });
-    setCssIdeStatus(publish ? 'Published ✓' : 'Deployed ✓');
+    setCssIdeStatus('Published ✓');
     setTimeout(() => setCssIdeStatus(''), 3000);
   } catch (e) {
     setCssIdeStatus(e.message, true);
@@ -1883,6 +1905,163 @@ function renderColorSwatches() {
       cssIdeColorMarks.push(mark);
     }
   }
+}
+
+// ─── Docs Tab ─────────────────────────────────────────────────────────────────
+
+const PINNED_DOCS = [
+  { title: 'Latest Sync Express',        url: 'https://drive.google.com/drive/folders/1ZGzkhgQgPqYgynC6oTkxw1_N9nA3ocQ1' },
+  { title: 'Sync Express Child Theme',   url: 'https://drive.google.com/drive/folders/15W7CkTwmeHxOIT0GYY-mJ3Nv5oLpsKgL' },
+  { title: "IT SOP's",                   url: 'https://drive.google.com/drive/folders/1c-z3qmA0c38oq6BKkIl1jj8X_OXaPCAi' },
+  { title: "Sync SOP's",                 url: 'https://drive.google.com/drive/folders/1i74JyMOQvqZijVV6mZB841eTvKoqlOx4' },
+  { title: "Sync Express SOP's",         url: 'https://drive.google.com/drive/folders/1NkoUUbfRe-aziOZReX76MILxgzdgP3Qt' },
+  { title: 'Sync Express Install Guide', url: 'https://docs.google.com/document/d/15eK_hCvxPA2u3BVfjmUAvAEQ4IqUMd9oCOnuR6XV2aM/edit?tab=t.0#heading=h.pdm5fi2akt2b' },
+  { title: 'Sync Acquire User Manual',   url: 'https://docs.google.com/document/d/1G2WL8e6Y3cuXia_UeKoks4U8qCQQ4SFcVdnirZm5WSg/edit?tab=t.w9lk7i3ra967#heading=h.690z1psrtwyh' },
+];
+
+let userDocs      = [];  // loaded from storage
+let docsEditingId = null; // id of doc currently being edited
+
+function docTypeIcon(url) {
+  if (url.includes('drive.google.com/drive/folders')) {
+    // Folder icon
+    return `<svg class="docs-type-icon" viewBox="0 0 16 16" fill="none" width="14" height="14">
+      <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3.086a1.5 1.5 0 0 1 1.06.44l.915.914A1.5 1.5 0 0 0 9.62 4.9H12.5A1.5 1.5 0 0 1 14 6.4V12a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5Z" stroke="currentColor" stroke-width="1.3"/>
+    </svg>`;
+  }
+  // Doc icon (default)
+  return `<svg class="docs-type-icon" viewBox="0 0 16 16" fill="none" width="14" height="14">
+    <rect x="3" y="1.5" width="10" height="13" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+    <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function setupDocsTab() {
+  renderPinnedDocs();
+  loadUserDocs();
+
+  document.getElementById('docsAddBtn').addEventListener('click', openDocsAddForm);
+  document.getElementById('docsFormCancel').addEventListener('click', closeDocsForm);
+  document.getElementById('docsFormSave').addEventListener('click', saveDocsForm);
+
+  document.getElementById('docsFormTitle').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('docsFormUrl').focus();
+    if (e.key === 'Escape') closeDocsForm();
+  });
+  document.getElementById('docsFormUrl').addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveDocsForm();
+    if (e.key === 'Escape') closeDocsForm();
+  });
+}
+
+function renderPinnedDocs() {
+  const list = document.getElementById('docsPinnedList');
+  if (!PINNED_DOCS.length) {
+    list.innerHTML = '<div class="docs-empty">No pinned resources yet.</div>';
+    return;
+  }
+  list.innerHTML = PINNED_DOCS.map(doc => `
+    <a class="docs-item docs-item-pinned" href="${escapeHtml(doc.url)}" target="_blank" rel="noopener noreferrer">
+      ${docTypeIcon(doc.url)}
+      <span class="docs-item-title">${escapeHtml(doc.title)}</span>
+      <svg class="docs-item-arrow" viewBox="0 0 10 10" fill="none" width="10" height="10">
+        <path d="M2 8l6-6M4 2h4v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </a>
+  `).join('');
+}
+
+async function loadUserDocs() {
+  try {
+    const resp = await send({ type: 'GET_DOCS' });
+    userDocs = resp.docs || [];
+  } catch (_) { userDocs = []; }
+  renderUserDocs();
+}
+
+async function saveUserDocs() {
+  try { await send({ type: 'SAVE_DOCS', docs: userDocs }); } catch (_) {}
+}
+
+function renderUserDocs() {
+  const list = document.getElementById('docsUserList');
+  if (!userDocs.length) {
+    list.innerHTML = '<div class="docs-empty">No docs saved yet.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  userDocs.forEach(doc => {
+    const el = document.createElement('div');
+    el.className = 'docs-item';
+    el.dataset.id = doc.id;
+    el.innerHTML = `
+      <a class="docs-item-link" href="${escapeHtml(doc.url)}" target="_blank" rel="noopener noreferrer">
+        ${docTypeIcon(doc.url)}
+        <span class="docs-item-title">${escapeHtml(doc.title)}</span>
+        <svg class="docs-item-arrow" viewBox="0 0 10 10" fill="none" width="10" height="10">
+          <path d="M2 8l6-6M4 2h4v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+      <div class="docs-item-actions">
+        <button class="docs-edit-btn" data-id="${doc.id}" title="Edit">Edit</button>
+        <button class="docs-delete-btn" data-id="${doc.id}" title="Delete">Delete</button>
+      </div>
+    `;
+    el.querySelector('.docs-edit-btn').addEventListener('click', () => openDocsEditForm(doc.id));
+    el.querySelector('.docs-delete-btn').addEventListener('click', () => deleteDoc(doc.id));
+    list.appendChild(el);
+  });
+}
+
+function openDocsAddForm() {
+  docsEditingId = null;
+  document.getElementById('docsFormTitle').value = '';
+  document.getElementById('docsFormUrl').value = '';
+  document.getElementById('docsFormSave').textContent = 'Save';
+  document.getElementById('docsAddForm').classList.remove('hidden');
+  document.getElementById('docsAddBtn').classList.add('hidden');
+  document.getElementById('docsFormTitle').focus();
+}
+
+function openDocsEditForm(id) {
+  const doc = userDocs.find(d => d.id === id);
+  if (!doc) return;
+  docsEditingId = id;
+  document.getElementById('docsFormTitle').value = doc.title;
+  document.getElementById('docsFormUrl').value = doc.url;
+  document.getElementById('docsFormSave').textContent = 'Update';
+  document.getElementById('docsAddForm').classList.remove('hidden');
+  document.getElementById('docsAddBtn').classList.add('hidden');
+  document.getElementById('docsFormTitle').focus();
+}
+
+function closeDocsForm() {
+  docsEditingId = null;
+  document.getElementById('docsAddForm').classList.add('hidden');
+  document.getElementById('docsAddBtn').classList.remove('hidden');
+}
+
+async function saveDocsForm() {
+  const title = document.getElementById('docsFormTitle').value.trim();
+  const url   = document.getElementById('docsFormUrl').value.trim();
+  if (!title || !url) return;
+
+  if (docsEditingId) {
+    const doc = userDocs.find(d => d.id === docsEditingId);
+    if (doc) { doc.title = title; doc.url = url; }
+  } else {
+    userDocs.push({ id: Date.now().toString(), title, url });
+  }
+
+  await saveUserDocs();
+  closeDocsForm();
+  renderUserDocs();
+}
+
+async function deleteDoc(id) {
+  userDocs = userDocs.filter(d => d.id !== id);
+  await saveUserDocs();
+  renderUserDocs();
 }
 
 // ─── CSS Inline Chat ──────────────────────────────────────────────────────────
