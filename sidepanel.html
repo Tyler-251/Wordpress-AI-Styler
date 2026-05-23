@@ -22,11 +22,12 @@
     <button class="icon-btn hidden" id="newChat" title="New chat">
       <svg viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
     </button>
-    <button class="icon-btn" id="openSettings" title="Settings">
-      <svg viewBox="0 0 16 16" fill="none">
-        <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/>
-        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.42 1.42M11.53 11.53l1.42 1.42M3.05 12.95l1.42-1.42M11.53 4.47l1.42-1.42" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+    <button class="icon-btn settings-btn" id="openSettings" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
       </svg>
+      <span class="settings-btn-label">Config</span>
     </button>
   </div>
 
@@ -266,6 +267,73 @@
     </div>
   </div>
 
+  <!-- ─── Status Bar ─── -->
+  <div class="statusbar" id="statusBar">
+
+    <!-- AI Provider -->
+    <div class="statusbar-item" id="sbProviderWrap">
+      <button class="statusbar-btn" id="sbProviderBtn">
+        <img class="sb-model-icon" id="sbProviderIcon" src="icons/models/claude.png" alt="" onerror="this.style.display='none'">
+        <span id="sbProviderLabel">Claude</span>
+        <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="statusbar-popover hidden" id="sbProviderPopover">
+        <button class="sb-popover-item" data-value="claude">
+          <img src="icons/models/claude.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+          <span>Claude</span>
+          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="sb-popover-item" data-value="deepseek">
+          <img src="icons/models/deepseek.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+          <span>DeepSeek</span>
+          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="sb-popover-item" data-value="ollama">
+          <img src="icons/models/ollama.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+          <span>Ollama</span>
+          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Model (hidden for Ollama) — sep lives inside so it hides with the item -->
+    <div class="statusbar-item hidden" id="sbModelWrap">
+      <div class="sb-sep"></div>
+      <button class="statusbar-btn" id="sbModelBtn">
+        <span id="sbModelLabel">Sonnet 4.6</span>
+        <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="statusbar-popover hidden" id="sbModelPopover">
+        <!-- populated dynamically -->
+      </div>
+    </div>
+
+    <!-- CSS tab shortcut hint -->
+    <span class="sb-shortcut-hint hidden" id="sbShortcutHint">
+      <kbd id="sbShortcutKey">Ctrl+I</kbd> to <span class="sb-shortcut-star">✦</span> edit
+    </span>
+
+    <!-- Mode: Patch / Full Rewrite — only on Agent tab -->
+    <div class="statusbar-item hidden" id="sbModeWrap">
+      <div class="sb-sep"></div>
+      <button class="statusbar-btn" id="sbModeBtn">
+        <span id="sbModeLabel">Full Rewrite</span>
+        <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="statusbar-popover hidden" id="sbModePopover">
+        <button class="sb-popover-item" data-value="full">
+          <span>Full Rewrite</span>
+          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="sb-popover-item" data-value="patch">
+          <span>Patch Mode</span>
+          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+  </div>
+
   <!-- ─── Settings Panel (overlay) ─── -->
   <div class="settings-panel hidden" id="settingsPanel">
 
@@ -479,7 +547,8 @@
           </svg>
         </button>
         <div class="tools-menu hidden" id="toolsMenu">
-          <button class="tools-menu-item" id="insertSaEzTheme">Insert SA EZ child theme</button>
+          <button class="tools-menu-item" id="insertSaEzTheme">Inject Sync Express Starter CSS</button>
+          <button class="tools-menu-item" id="ensureThisTab">Ensure This Tab is Selected</button>
         </div>
       </div>
       <button class="btn-secondary btn-sm" id="viewBackups">

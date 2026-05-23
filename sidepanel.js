@@ -62,6 +62,8 @@ async function init() {
   await loadDesignRef();
   setupContextDrawer();
   setupMainTabs();
+  setupStatusBar();
+  updateStatusBarMode('css'); // CSS is the default active tab
   setupSettings();
   setupSetupTab();
   setupWorkflowTab();
@@ -99,6 +101,7 @@ function setupMainTabs() {
       document.getElementById('docsPanel').classList.toggle('hidden', panel !== 'docs');
       document.getElementById('newChat').classList.toggle('hidden', panel !== 'helper');
       document.getElementById('ctxDrawer').classList.toggle('hidden', panel === 'css' || panel === 'docs');
+      updateStatusBarMode(panel);
       if (panel === 'css') loadCssIde();
     });
   });
@@ -400,8 +403,10 @@ async function handleChatSend() {
   appendChatMessage('user', text);
   const assistantEl = appendChatMessage('assistant', '');
   assistantEl.classList.add('streaming');
+  assistantEl.innerHTML = '<span class="chat-thinking">Uploading…</span>';
 
   let buffer = '';
+  let chatPhase = 'uploading'; // 'uploading' | 'thinking' | 'generating'
   const port = chrome.runtime.connect({ name: 'chat' });
 
   port.onMessage.addListener(msg => {
@@ -415,12 +420,21 @@ async function handleChatSend() {
       assistantEl.before(note);
     } else if (msg.type === 'CHAT_CHUNK') {
       buffer += msg.text;
+      if (chatPhase === 'uploading') chatPhase = 'thinking';
+
       const thinking = isThinking(buffer);
       const content  = extractThought(buffer);
+
       if (thinking) {
-        assistantEl.innerHTML = '<span class="chat-thinking">Thinking…</span>';
+        assistantEl.innerHTML = `<span class="chat-thinking">Thinking… (${buffer.length} chars)</span>`;
       } else {
-        assistantEl.innerHTML = renderChatMarkdown(content);
+        if (chatPhase !== 'generating') chatPhase = 'generating';
+        if (!content.trim()) {
+          // Content extracting but not yet renderable — show Generating status
+          assistantEl.innerHTML = `<span class="chat-thinking">Generating… (${buffer.length} chars)</span>`;
+        } else {
+          assistantEl.innerHTML = renderChatMarkdown(content);
+        }
       }
       assistantEl.scrollIntoView({ block: 'end' });
     } else if (msg.type === 'CHAT_DONE') {
@@ -655,6 +669,7 @@ async function doSaveSettings() {
     cssMode,
   };
   await send({ type: 'SAVE_SETTINGS', settings });
+  updateStatusBar(settings);
 }
 
 function flashSaveBtn() {
@@ -727,6 +742,20 @@ function setupSettings() {
     } catch (e) {
       showError(e.message);
     }
+  });
+
+  // ── Ensure This Tab is Selected ──
+  document.getElementById('ensureThisTab').addEventListener('click', async () => {
+    toolsMenu.classList.add('hidden');
+    toolsWrap.classList.remove('open');
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (tab) {
+        state.siteTabId    = tab.id;
+        state.siteTabTitle = tab.title || 'this tab';
+        hideTabMismatch();
+      }
+    } catch (_) {}
   });
 }
 
@@ -812,6 +841,7 @@ async function loadSettings() {
   try {
     const settings = await send({ type: 'GET_SETTINGS' });
     applySettingsToForm(settings);
+    updateStatusBar(settings);
   } catch (_) {}
 }
 
@@ -1257,7 +1287,7 @@ function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, 
   showGeneratedCss('');
   cssBlock.value = '';
   cssBlock.disabled = true;
-  cssBlock.placeholder = 'Generating…';
+  cssBlock.placeholder = 'Uploading…';
   resetApplyButton();
   setAgentActionsLocked(true);
   document.getElementById('stopGenerate').classList.remove('hidden');
@@ -1266,7 +1296,9 @@ function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, 
   document.getElementById('cssDebugNote').classList.add('hidden');
 
   state.stopping = false;
-  let charCount = 0;
+  let charCount    = 0;
+  let agentBuffer  = '';
+  let agentPhase   = 'uploading'; // 'uploading' | 'thinking' | 'generating'
 
   const port = chrome.runtime.connect({ name: 'generate' });
   state.generatePort = port;
@@ -1278,12 +1310,22 @@ function streamGenerate({ instructions, baseCss, history, siteTabId, stepScope, 
       note.classList.remove('hidden');
 
     } else if (msg.type === 'CSS_RETRY') {
-      charCount = 0;
-      cssBlock.placeholder = 'Retrying…';
+      charCount   = 0;
+      agentBuffer = '';
+      agentPhase  = 'uploading';
+      cssBlock.placeholder = 'Uploading…';
 
     } else if (msg.type === 'CSS_CHUNK') {
-      charCount += msg.text.length;
-      cssBlock.placeholder = `Generating… (${charCount} chars)`;
+      charCount    += msg.text.length;
+      agentBuffer  += msg.text;
+
+      // Phase: uploading → thinking on first chunk, thinking → generating once <css> tag seen
+      if (agentPhase === 'uploading') agentPhase = 'thinking';
+      if (agentPhase === 'thinking' && agentBuffer.includes('<css>')) agentPhase = 'generating';
+
+      cssBlock.placeholder = agentPhase === 'generating'
+        ? `Generating… (${charCount} chars)`
+        : `Thinking… (${charCount} chars)`;
 
     } else if (msg.type === 'CSS_DONE') {
       state.lastGeneratedCss    = msg.css;
@@ -2064,6 +2106,141 @@ async function deleteDoc(id) {
   renderUserDocs();
 }
 
+// ─── Status Bar ──────────────────────────────────────────────────────────────
+
+const SB_PROVIDER_ICONS = {
+  claude:   'icons/models/claude.png',
+  deepseek: 'icons/models/deepseek.png',
+  ollama:   'icons/models/ollama.png',
+};
+const SB_PROVIDER_LABELS = { claude: 'Claude', deepseek: 'DeepSeek', ollama: 'Ollama' };
+
+function setupStatusBar() {
+  // Provider
+  document.getElementById('sbProviderBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    toggleSbPopover('sbProviderPopover');
+  });
+  document.querySelectorAll('#sbProviderPopover .sb-popover-item').forEach(item => {
+    item.addEventListener('click', async () => {
+      closeSbPopovers();
+      await saveStatusBarSetting('aiBackend', item.dataset.value);
+    });
+  });
+
+  // Model (dynamic items — delegated)
+  document.getElementById('sbModelBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    toggleSbPopover('sbModelPopover');
+  });
+  document.getElementById('sbModelPopover').addEventListener('click', async e => {
+    const item = e.target.closest('.sb-popover-item');
+    if (!item) return;
+    const backend = document.querySelector('#backendToggle .toggle-opt.active')?.dataset.value || 'claude';
+    const key = backend === 'deepseek' ? 'deepseekModel' : 'claudeModel';
+    closeSbPopovers();
+    await saveStatusBarSetting(key, item.dataset.value);
+  });
+
+  // Mode
+  document.getElementById('sbModeBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    toggleSbPopover('sbModePopover');
+  });
+  document.querySelectorAll('#sbModePopover .sb-popover-item').forEach(item => {
+    item.addEventListener('click', async () => {
+      closeSbPopovers();
+      await saveStatusBarSetting('cssMode', item.dataset.value);
+    });
+  });
+
+  // Global dismiss
+  document.addEventListener('click', closeSbPopovers);
+}
+
+function toggleSbPopover(id) {
+  const el = document.getElementById(id);
+  const wasHidden = el.classList.contains('hidden');
+  closeSbPopovers();
+  if (wasHidden) el.classList.remove('hidden');
+}
+
+function closeSbPopovers() {
+  document.querySelectorAll('.statusbar-popover').forEach(p => p.classList.add('hidden'));
+}
+
+function updateStatusBar(settings) {
+  const backend  = settings.aiBackend  || 'claude';
+  const cssMode  = settings.cssMode    || 'full';
+
+  // ── Provider ──
+  const iconEl = document.getElementById('sbProviderIcon');
+  iconEl.src = SB_PROVIDER_ICONS[backend] || '';
+  iconEl.style.display = '';
+  document.getElementById('sbProviderLabel').textContent = SB_PROVIDER_LABELS[backend] || backend;
+  document.querySelectorAll('#sbProviderPopover .sb-popover-item').forEach(item => {
+    const active = item.dataset.value === backend;
+    item.classList.toggle('selected', active);
+    item.querySelector('.sb-check').classList.toggle('hidden', !active);
+  });
+
+  // ── Model ──
+  const modelWrap = document.getElementById('sbModelWrap');
+  if (backend === 'ollama') {
+    modelWrap.classList.add('hidden');
+  } else {
+    modelWrap.classList.remove('hidden');
+    const models = backend === 'deepseek' ? DEEPSEEK_MODELS : CLAUDE_MODELS;
+    const currentId = backend === 'deepseek'
+      ? (settings.deepseekModel || 'deepseek-v4-flash')
+      : (settings.claudeModel   || 'claude-sonnet-4-6');
+    const active = models.find(m => m.id === currentId) || models[0];
+    document.getElementById('sbModelLabel').textContent = active ? active.label : currentId;
+
+    document.getElementById('sbModelPopover').innerHTML = models.map(m => `
+      <button class="sb-popover-item${m.id === currentId ? ' selected' : ''}" data-value="${m.id}">
+        <span>${escapeHtml(m.label)}</span>
+        <svg class="sb-check${m.id === currentId ? '' : ' hidden'}" viewBox="0 0 12 12" fill="none">
+          <path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    `).join('');
+  }
+
+  // ── Mode ──
+  document.getElementById('sbModeLabel').textContent = cssMode === 'patch' ? 'Patch Mode' : 'Full Rewrite';
+  document.querySelectorAll('#sbModePopover .sb-popover-item').forEach(item => {
+    const active = item.dataset.value === cssMode;
+    item.classList.toggle('selected', active);
+    item.querySelector('.sb-check').classList.toggle('hidden', !active);
+  });
+}
+
+const SB_IS_MAC = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Mac OS');
+
+function updateStatusBarMode(panel) {
+  document.getElementById('sbModeWrap').classList.toggle('hidden', panel !== 'agent');
+  document.getElementById('statusBar').classList.toggle('hidden', panel === 'docs');
+
+  const hint = document.getElementById('sbShortcutHint');
+  hint.classList.toggle('hidden', panel !== 'css');
+  if (panel === 'css') {
+    document.getElementById('sbShortcutKey').textContent = SB_IS_MAC ? '⌘i' : 'Ctrl+i';
+  }
+}
+
+async function saveStatusBarSetting(key, value) {
+  try {
+    const settings = await send({ type: 'GET_SETTINGS' });
+    settings[key] = value;
+    await send({ type: 'SAVE_SETTINGS', settings });
+    applySettingsToForm(settings);
+    updateStatusBar(settings);
+  } catch (e) {
+    console.error('[StatusBar]', e);
+  }
+}
+
 // ─── CSS Inline Chat ──────────────────────────────────────────────────────────
 
 let cssInlineChat = null; // { lineWidget, port, from, to, el }
@@ -2138,31 +2315,46 @@ function submitInlineChat(instruction) {
   const { el, selectedCss } = cssInlineChat;
   let buffer = '';
 
-  // Swap to streaming phase
+  // Swap to streaming phase — no raw preview, just a spinner
   el.innerHTML = `
     <div class="css-inline-chat-row css-inline-chat-streaming-row">
       <span class="css-inline-chat-icon css-inline-chat-icon-spin">✦</span>
-      <span class="css-inline-chat-label">Rewriting…</span>
+      <span class="css-inline-chat-label">Uploading…</span>
       <button class="css-inline-chat-dismiss" title="Stop">
         <svg viewBox="0 0 10 10" fill="none" width="10" height="10">
           <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
       </button>
     </div>
-    <pre class="css-inline-chat-preview"></pre>
   `;
   el.querySelector('.css-inline-chat-dismiss').addEventListener('click', closeInlineChat);
   cssInlineChat.lineWidget.changed();
 
-  const preview = el.querySelector('.css-inline-chat-preview');
+  // Track which phase we're in: uploading → thinking → generating
+  // "generating" kicks in once we see a CSS brace in the stream buffer
+  let inlinePhase = 'uploading';
+
   const port = chrome.runtime.connect({ name: 'css-inline-rewrite' });
   cssInlineChat.port = port;
 
   port.onMessage.addListener(msg => {
     if (msg.type === 'INLINE_CHUNK') {
       buffer += msg.text;
-      preview.textContent = cleanInlineCss(buffer);
-      cssInlineChat.lineWidget.changed();
+
+      // Advance phase: uploading → thinking on first chunk, thinking → generating on first '{'
+      if (inlinePhase === 'uploading') {
+        inlinePhase = 'thinking';
+      }
+      if (inlinePhase === 'thinking' && buffer.includes('{')) {
+        inlinePhase = 'generating';
+      }
+
+      const label = el.querySelector('.css-inline-chat-label');
+      if (label) {
+        label.textContent = inlinePhase === 'generating'
+          ? `Generating… (${buffer.length} chars)`
+          : `Thinking… (${buffer.length} chars)`;
+      }
 
     } else if (msg.type === 'INLINE_DONE') {
       const finalCss = cleanInlineCss(msg.css || buffer);
@@ -2170,9 +2362,10 @@ function submitInlineChat(instruction) {
       renderInlineChatResult(el, finalCss);
 
     } else if (msg.type === 'INLINE_ERROR') {
-      el.querySelector('.css-inline-chat-label').textContent = msg.error;
-      el.querySelector('.css-inline-chat-label').style.color = 'var(--danger)';
-      el.querySelector('.css-inline-chat-icon').classList.remove('css-inline-chat-icon-spin');
+      const label = el.querySelector('.css-inline-chat-label');
+      const icon  = el.querySelector('.css-inline-chat-icon');
+      if (label) { label.textContent = msg.error; label.style.color = 'var(--danger)'; }
+      if (icon)  icon.classList.remove('css-inline-chat-icon-spin');
       cssInlineChat.port = null;
       cssInlineChat.lineWidget.changed();
     }
@@ -2186,14 +2379,24 @@ function submitInlineChat(instruction) {
 }
 
 function renderInlineChatResult(el, finalCss) {
+  const originalCss = cssInlineChat.selectedCss || '';
+  const diff        = computeLineDiff(originalCss.trim(), finalCss.trim());
+  const hasChanges  = diff.some(d => d.type !== 'same');
+
+  const diffHtml = diff.map(({ type, line }) => {
+    const prefix = type === 'add' ? '+' : type === 'remove' ? '−' : ' ';
+    const cls    = type === 'add' ? 'css-diff-add' : type === 'remove' ? 'css-diff-remove' : 'css-diff-same';
+    return `<div class="css-diff-line ${cls}"><span class="css-diff-prefix">${prefix}</span><span class="css-diff-text">${escapeHtml(line)}</span></div>`;
+  }).join('');
+
   el.innerHTML = `
     <div class="css-inline-chat-row css-inline-chat-done-row">
       <span class="css-inline-chat-icon">✦</span>
-      <span class="css-inline-chat-label css-inline-chat-label-done">Done</span>
+      <span class="css-inline-chat-label css-inline-chat-label-done">${hasChanges ? 'Review changes' : 'No changes'}</span>
       <button class="css-inline-chat-apply btn-primary btn-sm">Apply</button>
       <button class="css-inline-chat-dismiss btn-secondary btn-sm">Discard</button>
     </div>
-    <pre class="css-inline-chat-preview">${escapeHtml(finalCss)}</pre>
+    <div class="css-inline-diff">${diffHtml || '<div class="css-diff-empty">No output returned.</div>'}</div>
   `;
   el.querySelector('.css-inline-chat-apply').addEventListener('click', () => applyInlineRewrite(finalCss));
   el.querySelector('.css-inline-chat-dismiss').addEventListener('click', closeInlineChat);
@@ -2215,6 +2418,49 @@ function cleanInlineCss(text) {
     .replace(/^```[\w]*\r?\n?/m, '')
     .replace(/\r?\n?```\s*$/m, '')
     .trim();
+}
+
+// LCS-based line diff — returns array of { type: 'same'|'add'|'remove', line: string }
+function computeLineDiff(oldText, newText) {
+  const a = oldText.split('\n');
+  const b = newText.split('\n');
+  const m = a.length;
+  const n = b.length;
+
+  // Guard against O(m×n) blowup on giant blocks
+  if (m * n > 20000) {
+    return [
+      ...a.map(line => ({ type: 'remove', line })),
+      ...b.map(line => ({ type: 'add',    line })),
+    ];
+  }
+
+  // dp[i][j] = LCS length of a[i..] vs b[j..]
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  // Walk table to emit diff entries (removes grouped before adds at each hunk)
+  const result = [];
+  let i = 0, j = 0;
+  while (i < m || j < n) {
+    if (i < m && j < n && a[i] === b[j]) {
+      result.push({ type: 'same', line: a[i] });
+      i++; j++;
+    } else if (i < m && (j >= n || dp[i + 1][j] >= dp[i][j + 1])) {
+      result.push({ type: 'remove', line: a[i] });
+      i++;
+    } else {
+      result.push({ type: 'add', line: b[j] });
+      j++;
+    }
+  }
+  return result;
 }
 
 // ─── Tab Mismatch ─────────────────────────────────────────────────────────────
