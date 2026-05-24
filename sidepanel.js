@@ -395,6 +395,9 @@ async function handleChatSend() {
   const text  = input.value.trim();
   if (!text) return;
 
+  // Create a session on the very first send if none exists yet
+  if (chatSessions.length === 0) openNewChatSession();
+
   const sendBtn = document.getElementById('chatSend');
   input.value = '';
   input.style.height = 'auto';
@@ -2602,16 +2605,36 @@ function listenForTabChanges() {
 
 // ─── Chat Sidebar ─────────────────────────────────────────────────────────────
 
+// Tracks pre-chat window width so we can restore it on close
+let _preCheatWindowWidth = null;
+
+function setChatSidebarOpen(open) {
+  const sidebar   = document.getElementById('chatSidebar');
+  const toggleBtn = document.getElementById('toggleChat');
+  const wasOpen   = sidebar.classList.contains('open');
+  if (open === wasOpen) return;
+
+  sidebar.classList.toggle('open', open);
+  toggleBtn.classList.toggle('active', open);
+
+  // Expand/contract the browser window to make room for the chat panel
+  chrome.windows.getCurrent(win => {
+    if (open) {
+      _preCheatWindowWidth = win.width;
+      chrome.windows.update(win.id, { width: win.width + 280 });
+    } else if (_preCheatWindowWidth !== null) {
+      chrome.windows.update(win.id, { width: _preCheatWindowWidth });
+      _preCheatWindowWidth = null;
+    }
+  });
+}
+
 function setupChatSidebar() {
-  const sidebar = document.getElementById('chatSidebar');
   const toggleBtn = document.getElementById('toggleChat');
 
   toggleBtn.addEventListener('click', () => {
-    const isOpen = sidebar.classList.contains('open');
-    // Lazy-create first session on first open
-    if (!isOpen && chatSessions.length === 0) openNewChatSession();
-    sidebar.classList.toggle('open', !isOpen);
-    toggleBtn.classList.toggle('active', !isOpen);
+    const isOpen = document.getElementById('chatSidebar').classList.contains('open');
+    setChatSidebarOpen(!isOpen);
   });
 
   // Hook up chat send/input inside sidebar (reuses handleChatSend logic)
@@ -2897,10 +2920,8 @@ function submitAgentFlap() {
 }
 
 function submitAgentFlapRequest(instructions, agentCtxItems) {
-  // Open chat sidebar (lazy-init first session if needed, then open a dedicated one)
-  const sidebar = document.getElementById('chatSidebar');
-  sidebar.classList.add('open');
-  document.getElementById('toggleChat').classList.add('active');
+  // Open chat sidebar and create a dedicated session for this request
+  setChatSidebarOpen(true);
   openNewChatSession('✦ Changes');  // snapshots any existing session first
 
   // Show user message in chat

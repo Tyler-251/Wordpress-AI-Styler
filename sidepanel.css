@@ -2426,14 +2426,15 @@ kbd#sbShortcutKey {
   gap: 6px;
 }
 
+/* Sidebar buttons match the chat-input natural height (38px: 8px pad×2 + 20px line + 2px border) */
 .chat-sidebar .ctx-add-btn {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
 }
 
 .chat-sidebar .chat-send {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
 }
 
 .chat-input-footer {
@@ -2591,13 +2592,14 @@ kbd#sbShortcutKey {
 .agent-flap-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(22,124,255,0.18); }
 .agent-flap-input::placeholder { color: var(--text-secondary); }
 
+/* Agent flap buttons match textarea natural height (36px: 7px pad×2 + 20px line + 2px border) */
 .agent-flap-send,
 .agent-flap-stop {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: none;
