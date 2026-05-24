@@ -32,7 +32,7 @@ body {
   color: var(--text-primary);
   background: var(--bg-base);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
 /* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
@@ -1577,14 +1577,33 @@ select.select-input option {
 }
 .btn-text-muted:hover { color: var(--text-primary); background: var(--bg-surface-hover); }
 
-/* ─── Docs Panel ─────────────────────────────────────────────────────────────── */
+/* ─── Docs Panel (full-window overlay) ───────────────────────────────────────── */
 
 .docs-panel {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-base);
+  z-index: 200;
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
   overflow: hidden;
+}
+
+.docs-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.docs-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
 }
 
 .docs-scroll {
@@ -2222,3 +2241,627 @@ kbd#sbShortcutKey {
 .cm-s-sync-dark span.cm-qualifier  { color: #d7ba7d; }  /* .class, #id selectors */
 .cm-s-sync-dark span.cm-error      { color: var(--danger); }
 .cm-s-sync-dark span.cm-bracket    { color: #d4d4d4; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NEW LAYOUT — flex-row body with main-layout + chat-sidebar
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Main Layout Column ─────────────────────────────────────────────────────── */
+
+.main-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ─── Top Bar (override old .main-bar to remove tab logic) ───────────────────── */
+
+.main-bar {
+  justify-content: space-between;
+  padding: 4px 6px;
+}
+
+.main-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.main-bar-docs-btn {
+  height: 26px;
+  padding: 0 10px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.main-bar-docs-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  border-color: rgba(255,255,255,0.2);
+}
+
+/* ✦ Chat — VS Code-style floating action button */
+.chat-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 12px 0 10px;
+  background: var(--accent);
+  border: none;
+  border-radius: 99px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(22, 124, 255, 0.35);
+}
+.chat-toggle-btn:hover { background: var(--accent-hover); box-shadow: 0 2px 12px rgba(22,124,255,0.5); }
+.chat-toggle-btn.active { background: #0e4fac; }
+
+.chat-toggle-star {
+  font-size: 11px;
+  opacity: 0.9;
+  line-height: 1;
+}
+
+/* ─── Chat Sidebar ───────────────────────────────────────────────────────────── */
+
+.chat-sidebar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-base);
+  overflow: hidden;
+  /* Collapse to zero width when closed */
+  width: 0;
+  min-width: 0;
+  transition: width 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              min-width 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+.chat-sidebar.open {
+  width: 280px;
+  min-width: 280px;
+}
+
+.chat-sidebar-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  min-height: 36px;
+  padding: 0 4px;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.chat-tabs {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  gap: 2px;
+}
+.chat-tabs::-webkit-scrollbar { display: none; }
+
+.chat-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.chat-tab:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.chat-tab.active { background: var(--bg-base); color: var(--text-primary); }
+
+.chat-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 10px;
+  opacity: 0.5;
+  transition: opacity 0.12s, background 0.12s;
+  cursor: pointer;
+}
+.chat-tab:hover .chat-tab-close { opacity: 0.8; }
+.chat-tab-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.1); }
+
+.chat-new-tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.chat-new-tab-btn:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.chat-new-tab-btn svg { width: 10px; height: 10px; }
+
+/* Override default chat-messages to work inside sidebar */
+.chat-sidebar .chat-messages {
+  padding: 12px 10px;
+  gap: 14px;
+}
+
+/* Chat input area inside sidebar */
+.chat-sidebar .chat-input-area {
+  padding: 8px 8px;
+  gap: 6px;
+}
+
+.chat-sidebar .ctx-add-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.chat-sidebar .chat-send {
+  width: 32px;
+  height: 32px;
+}
+
+.chat-input-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+/* ─── Make Changes Toggle ─────────────────────────────────────────────────────── */
+
+.make-changes-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.mc-track {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 28px;
+  height: 16px;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  flex-shrink: 0;
+  transition: background 0.18s, border-color 0.18s;
+}
+
+.mc-thumb {
+  position: absolute;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  background: var(--text-secondary);
+  border-radius: 50%;
+  transition: transform 0.18s, background 0.18s;
+}
+
+#makeChangesCheck:checked ~ .mc-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+#makeChangesCheck:checked ~ .mc-track .mc-thumb {
+  transform: translateX(12px);
+  background: #fff;
+}
+
+/* Target via label structure */
+.make-changes-toggle-label input:checked + .mc-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.make-changes-toggle-label input:checked + .mc-track .mc-thumb {
+  transform: translateX(12px);
+  background: #fff;
+}
+
+.mc-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+.make-changes-toggle-label:has(input:checked) .mc-text { color: var(--accent); }
+
+/* ─── Agent Flap ─────────────────────────────────────────────────────────────── */
+
+.agent-flap {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-flap-handle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s;
+  text-align: left;
+}
+.agent-flap-handle:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.agent-flap.open .agent-flap-handle { color: var(--text-primary); }
+
+.agent-flap-chevron {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  transition: transform 0.2s;
+  color: var(--text-secondary);
+}
+.agent-flap.open .agent-flap-chevron { transform: rotate(180deg); }
+
+.agent-flap-title {
+  flex: 1;
+}
+
+.agent-flap-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 10px;
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1), padding 0.25s;
+}
+.agent-flap.open .agent-flap-body {
+  max-height: 240px;
+  padding: 0 10px 10px;
+}
+
+/* agent-flap-body is always display:flex; expansion controlled by parent .open class */
+
+.agent-ctx-bubbles {
+  /* shares .ctx-bubbles styles */
+}
+
+.agent-flap-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.agent-flap-input {
+  flex: 1;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+  max-height: 90px;
+  overflow-y: auto;
+  transition: border-color 0.15s;
+}
+.agent-flap-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(22,124,255,0.18); }
+.agent-flap-input::placeholder { color: var(--text-secondary); }
+
+.agent-flap-send,
+.agent-flap-stop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.agent-flap-send {
+  background: var(--accent);
+  color: #fff;
+}
+.agent-flap-send:hover { background: var(--accent-hover); }
+.agent-flap-send:disabled { opacity: 0.4; cursor: not-allowed; }
+.agent-flap-send svg { width: 14px; height: 14px; }
+
+.agent-flap-stop {
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border);
+  color: var(--danger);
+}
+.agent-flap-stop:hover { background: rgba(232,87,87,0.12); border-color: var(--danger); }
+.agent-flap-stop svg { width: 10px; height: 10px; }
+
+.agent-flap-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+/* ─── Diff Mode Indicator (in CSS toolbar) ───────────────────────────────────── */
+
+.diff-mode-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 99px;
+  padding: 2px 9px;
+}
+
+.diff-mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  animation: diff-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes diff-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* ─── Diff Mode Bar (replaces CSS footer while reviewing) ────────────────────── */
+
+.diff-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.06);
+  flex-shrink: 0;
+}
+
+.diff-scroll-next {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.diff-scroll-next:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.diff-scroll-next:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.diff-hunk-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-mode-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ─── CodeMirror diff hunk decorations ───────────────────────────────────────── */
+
+.cm-diff-add-bg { background: rgba(34, 197, 94, 0.12); display: block; }
+.cm-diff-remove-bg { background: rgba(239, 68, 68, 0.12); display: block; }
+
+.diff-hunk-widget {
+  margin: 2px 4px 4px 36px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.diff-hunk-actions {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.diff-hunk-approve {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid rgba(76, 175, 125, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(76, 175, 125, 0.08);
+  color: var(--success);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.diff-hunk-approve:hover { background: rgba(76, 175, 125, 0.18); }
+
+.diff-hunk-reject {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid rgba(232, 87, 87, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(232, 87, 87, 0.08);
+  color: var(--danger);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.diff-hunk-reject:hover { background: rgba(232, 87, 87, 0.18); }
+
+/* ─── Chat diff nodes (editor mode) ─────────────────────────────────────────── */
+
+.chat-diff-node {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin: 4px 0;
+}
+
+.chat-diff-node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.chat-diff-node-lines {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.chat-diff-node-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+}
+.chat-diff-node-count .diff-added   { color: #4ade80; }
+.chat-diff-node-count .diff-removed { color: #f87171; }
+
+.chat-diff-node-jump {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.chat-diff-node-jump:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+
+.chat-diff-node-actions {
+  display: flex;
+  gap: 5px;
+  padding: 5px 8px;
+}
+
+.chat-diff-node-approve {
+  flex: 1;
+  padding: 4px 0;
+  border: 1px solid rgba(76, 175, 125, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(76, 175, 125, 0.08);
+  color: var(--success);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chat-diff-node-approve:hover { background: rgba(76, 175, 125, 0.18); }
+
+.chat-diff-node-reject {
+  flex: 1;
+  padding: 4px 0;
+  border: 1px solid rgba(232, 87, 87, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(232, 87, 87, 0.08);
+  color: var(--danger);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chat-diff-node-reject:hover { background: rgba(232, 87, 87, 0.18); }
+
+.chat-diff-node.resolved {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.chat-diff-node.resolved-approve { border-color: rgba(76, 175, 125, 0.3); }
+.chat-diff-node.resolved-reject  { border-color: rgba(232, 87, 87, 0.3); }
+
+/* ─── Design Reference (Settings) ───────────────────────────────────────────── */
+
+.settings-design-ref-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.settings-design-ref-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.settings-design-ref-name {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Status bar always-on tweaks ────────────────────────────────────────────── */
+
+/* sbModeWrap is now always visible (no per-tab show/hide in new layout) */
+/* sbShortcutHint is always visible */

@@ -9,95 +9,127 @@
   <link rel="stylesheet" href="libs/codemirror/codemirror.min.css">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
-<body>
+<body class="app-body">
 
-  <!-- ─── Main Bar: tabs + new chat + settings ─── -->
-  <div class="main-bar">
-    <div class="main-tabs">
-      <button class="main-tab active" data-panel="css">CSS</button>
-      <button class="main-tab" data-panel="helper">Chat</button>
-      <button class="main-tab" data-panel="agent">Agent</button>
-      <button class="main-tab" data-panel="docs">Docs</button>
+  <!-- ═══════════════════════════════════════════════════════
+       MAIN LAYOUT COLUMN
+  ═══════════════════════════════════════════════════════ -->
+  <div class="main-layout" id="mainLayout">
+
+    <!-- ─── Top Bar ─── -->
+    <div class="main-bar">
+      <button class="icon-btn settings-btn" id="openSettings" title="Config">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+        <span class="settings-btn-label">Config</span>
+      </button>
+      <div class="main-bar-right">
+        <button class="main-bar-docs-btn" id="openDocs">Docs</button>
+        <button class="chat-toggle-btn" id="toggleChat">
+          <span class="chat-toggle-star">✦</span>
+          Chat
+        </button>
+      </div>
     </div>
-    <button class="icon-btn hidden" id="newChat" title="New chat">
-      <svg viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-    </button>
-    <button class="icon-btn settings-btn" id="openSettings" title="Settings">
-      <svg viewBox="0 0 24 24" fill="none">
-        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="1.5"/>
-        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
-      </svg>
-      <span class="settings-btn-label">Config</span>
-    </button>
-  </div>
 
-  <!-- ─── Context Drawer (below tabs, shown on Chat & Agent) ─── -->
-  <div class="ctx-drawer hidden" id="ctxDrawer">
-    <button class="ctx-drawer-toggle" id="ctxDrawerToggle">
-      <svg class="ctx-drawer-chevron" id="ctxDrawerChevron" viewBox="0 0 12 12" fill="none">
-        <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <svg viewBox="0 0 16 16" fill="none" width="13" height="13" style="flex-shrink:0;opacity:0.7">
-        <rect x="1" y="4" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/>
-        <circle cx="8" cy="9" r="2.5" stroke="currentColor" stroke-width="1.3"/>
-        <path d="M5.5 4l1-2h3l1 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <span class="ctx-drawer-label">Context</span>
-      <span class="ctx-drawer-summary" id="ctxDrawerSummary"></span>
-    </button>
-    <div class="ctx-drawer-body hidden" id="ctxDrawerBody">
-
-      <!-- Screenshot row -->
-      <div class="ctx-drawer-row">
-        <button class="btn-secondary" id="takeScreenshot">Take Screenshot</button>
-        <div class="ctx-media-preview hidden" id="ctxScreenshotPreview">
-          <img id="screenshotImg" class="ctx-thumb" alt="Screenshot">
-          <span class="ctx-media-meta" id="screenshotTime"></span>
-          <button class="ctx-remove" id="clearScreenshot" title="Remove screenshot">
-            <svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <!-- ─── CSS IDE Panel (always visible) ─── -->
+    <div class="css-ide-panel" id="cssIdePanel">
+      <div class="css-ide-toolbar">
+        <button class="btn-secondary btn-sm" id="cssIdeRefresh" title="Reload CSS from site">
+          <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
+            <path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Fetch
+        </button>
+        <button class="btn-secondary btn-sm" id="cssIdeSearchBtn" title="Find (Ctrl+F)">
+          <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
+            <circle cx="5.5" cy="5.5" r="3.5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M8.5 8.5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          Find
+        </button>
+        <span class="css-ide-meta" id="cssIdeMeta"></span>
+        <!-- Diff mode indicator -->
+        <span class="diff-mode-indicator hidden" id="diffModeIndicator">
+          <span class="diff-mode-dot"></span>
+          Reviewing changes
+        </span>
+      </div>
+      <div class="css-ide-search hidden" id="cssIdeSearch">
+        <button class="css-ide-search-ai-toggle" id="cssIdeSearchAiToggle" title="Toggle AI smart search">✦</button>
+        <input type="text" class="css-ide-search-input" id="cssIdeSearchInput" placeholder="Find in CSS…" spellcheck="false" autocomplete="off">
+        <span class="css-ide-search-count" id="cssIdeSearchCount"></span>
+        <button class="css-ide-search-nav" id="cssIdeSearchPrev" title="Previous (Shift+Enter)">
+          <svg viewBox="0 0 10 10" fill="none"><path d="M2 6.5l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="css-ide-search-nav" id="cssIdeSearchNext" title="Next (Enter)">
+          <svg viewBox="0 0 10 10" fill="none"><path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="css-ide-search-close" id="cssIdeSearchClose" title="Close (Esc)">
+          <svg viewBox="0 0 10 10" fill="none"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="css-ide-editor-wrap" id="cssIdeEditorWrap">
+        <textarea id="cssIdeTextarea" class="visually-hidden"></textarea>
+      </div>
+      <!-- Normal footer -->
+      <div class="css-ide-footer" id="cssIdeFooter">
+        <span class="css-ide-status" id="cssIdeStatus"></span>
+        <div class="css-ide-actions">
+          <button class="icon-btn" id="cssIdeReloadPage" title="Refresh Page">
+            <svg viewBox="0 0 16 16" fill="none">
+              <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <path d="M11 6h2.5v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
           </button>
+          <button class="btn-primary btn-sm" id="cssIdePublish">Publish</button>
         </div>
       </div>
-
-      <!-- Design ref row -->
-      <div class="ctx-drawer-row" id="ctxDrawerDesignRefRow">
-        <div id="ctxDesignRefEmpty">
-          <button class="btn-secondary" id="designRefBrowse">Add Design Ref</button>
-          <span class="ctx-drag-hint">or drop image here</span>
-        </div>
-        <div class="ctx-media-preview hidden" id="ctxDesignRefPreview">
-          <img id="designRefThumb" class="ctx-thumb" alt="Design ref">
-          <span class="ctx-media-meta" id="designRefName">Design Reference</span>
-          <button class="ctx-remove" id="designRefClear" title="Remove design ref">
-            <svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
+      <!-- Diff mode bar (replaces footer while reviewing) -->
+      <div class="diff-mode-bar hidden" id="diffModeBar">
+        <button class="diff-scroll-next" id="diffScrollNext">Scroll to next</button>
+        <span class="diff-hunk-count" id="diffHunkCount"></span>
+        <div class="diff-mode-actions">
+          <button class="btn-secondary btn-sm" id="diffRejectAll">Reject All</button>
+          <button class="btn-primary btn-sm" id="diffAcceptAll">Accept All</button>
         </div>
       </div>
-
     </div>
-    <input type="file" id="designRefInput" accept="image/*" class="visually-hidden">
-  </div>
 
-  <!-- ─── Agent Panel ─── -->
-  <div class="workflow-panel hidden" id="workflowPanel">
-
-    <div class="workflow-scroll">
-
-      <div class="section">
-        <div class="section-header">
-          <span class="section-label">Instructions</span>
-          <div class="scope-toggle" id="scopeToggle">
-            <button class="scope-btn active" data-scope="all">ALL</button>
-            <button class="scope-btn" data-scope="1">1</button>
-            <button class="scope-btn" data-scope="2">2</button>
-            <button class="scope-btn" data-scope="3">3</button>
-            <button class="scope-btn" data-scope="4">4</button>
-            <button class="scope-btn" data-scope="5">5</button>
+    <!-- ─── Agent Flap ─── -->
+    <div class="agent-flap" id="agentFlap">
+      <button class="agent-flap-handle" id="agentFlapHandle">
+        <svg class="agent-flap-chevron" id="agentFlapChevron" viewBox="0 0 10 6" fill="none">
+          <path d="M1 5l4-4 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="agent-flap-title">✦ Make Changes</span>
+      </button>
+      <div class="agent-flap-body" id="agentFlapBody">
+        <div class="agent-ctx-bubbles hidden" id="agentCtxBubbles"></div>
+        <div class="agent-flap-input-row">
+          <div class="ctx-add-wrap">
+            <button class="ctx-add-btn" id="agentCtxAddBtn" title="Add context">
+              <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="ctx-dropdown hidden" id="agentCtxDropdown">
+              <button class="ctx-opt" data-ctx="dom">DOM Snapshot</button>
+              <button class="ctx-opt" data-ctx="css">Existing CSS</button>
+              <button class="ctx-opt" data-ctx="screenshot">Take Screenshot</button>
+            </div>
           </div>
+          <textarea class="agent-flap-input" id="agentFlapInput" rows="2" placeholder="Describe what you want to change…"></textarea>
+          <button class="agent-flap-send" id="agentFlapSend" title="Send">
+            <svg viewBox="0 0 16 16" fill="none">
+              <path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <button class="agent-flap-stop hidden" id="agentFlapStop" title="Stop">
+            <svg viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor"/></svg>
+          </button>
         </div>
-        <textarea id="instructions" class="textarea" rows="4" placeholder="Describe the style change you want..."></textarea>
-        <button class="btn-primary full-width" id="generateCss">Generate CSS</button>
-        <div class="reconsolidate-row">
+        <div class="agent-flap-footer">
           <button class="btn-reconsolidate" id="reconsolidate">
             <svg viewBox="0 0 16 16" fill="none">
               <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -107,62 +139,98 @@
           </button>
         </div>
       </div>
-
-      <div class="divider" id="generatedDivider" style="display:none"></div>
-
-      <!-- Generated CSS section — hidden until response -->
-      <div class="section hidden" id="generatedSection">
-        <div class="section-header">
-          <span class="section-label" id="cssSectionLabel">Changes</span>
-          <button class="btn-stop hidden" id="stopGenerate" title="Stop generation">&#9632;</button>
-          <button class="link-btn hidden" id="toggleCssView">Show full CSS</button>
-        </div>
-        <div class="debug-note hidden" id="cssDebugNote"></div>
-        <div class="ctx-stats hidden" id="ctxStats">
-          <span class="ctx-stats-summary" id="ctxStatsSummary"></span>
-          <button class="ctx-stats-copy" id="ctxStatsCopy">
-            <span class="ctx-stats-arrow">›</span><span class="ctx-stats-label"> Copy Log</span>
-          </button>
-        </div>
-        <textarea class="css-block" id="cssBlock" spellcheck="false" placeholder="Generating…" disabled></textarea>
-        <div class="diff-stat hidden" id="diffStat"></div>
-        <div class="action-row">
-          <button class="btn-primary" id="applyChanges">Apply Changes</button>
-        </div>
-      </div>
-
-      <div class="error-box hidden" id="errorBox"></div>
-
-    </div><!-- /workflow-scroll -->
-
-    <!-- Revision bar — locked to bottom, shown after first generation -->
-    <div class="agent-revision-bar hidden" id="agentRevisionBar">
-      <div class="chat-input-row">
-        <textarea class="chat-input" id="revisionInput" rows="1" placeholder='Request a revision…'></textarea>
-        <button class="chat-send" id="revise" title="Send revision">
-          <svg class="revision-arrow" viewBox="0 0 16 16" fill="none">
-            <path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <span class="revision-spinner hidden"></span>
-        </button>
-        <button class="revision-stop-btn hidden" id="revisionStop" title="Stop revision">
-          <svg viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor"/></svg>
-        </button>
-      </div>
     </div>
 
-  </div>
+    <!-- ─── Status Bar ─── -->
+    <div class="statusbar" id="statusBar">
+      <!-- AI Provider -->
+      <div class="statusbar-item" id="sbProviderWrap">
+        <button class="statusbar-btn" id="sbProviderBtn">
+          <img class="sb-model-icon" id="sbProviderIcon" src="icons/models/claude.png" alt="" onerror="this.style.display='none'">
+          <span id="sbProviderLabel">Claude</span>
+          <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="statusbar-popover hidden" id="sbProviderPopover">
+          <button class="sb-popover-item" data-value="claude">
+            <img src="icons/models/claude.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+            <span>Claude</span>
+            <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="sb-popover-item" data-value="deepseek">
+            <img src="icons/models/deepseek.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+            <span>DeepSeek</span>
+            <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="sb-popover-item" data-value="openai">
+            <img src="icons/models/openai.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+            <span>OpenAI</span>
+            <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="sb-popover-item" data-value="ollama">
+            <img src="icons/models/ollama.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
+            <span>Ollama</span>
+            <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- Model -->
+      <div class="statusbar-item hidden" id="sbModelWrap">
+        <div class="sb-sep"></div>
+        <button class="statusbar-btn" id="sbModelBtn">
+          <span id="sbModelLabel">Sonnet 4.6</span>
+          <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="statusbar-popover hidden" id="sbModelPopover"></div>
+      </div>
+      <!-- Mode -->
+      <div class="statusbar-item" id="sbModeWrap">
+        <div class="sb-sep"></div>
+        <button class="statusbar-btn" id="sbModeBtn">
+          <span id="sbModeLabel">Full Rewrite</span>
+          <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="statusbar-popover hidden" id="sbModePopover">
+          <button class="sb-popover-item" data-value="full">
+            <span>Full Rewrite</span>
+            <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="sb-popover-item" data-value="patch">
+            <span>Patch Mode</span>
+            <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- Shortcut hint -->
+      <span class="sb-shortcut-hint" id="sbShortcutHint">
+        <kbd id="sbShortcutKey">Ctrl+i</kbd> to <span class="sb-shortcut-star">✦</span> edit
+      </span>
+    </div>
 
-  <!-- ─── Helper Panel ─── -->
-  <div class="helper-panel hidden" id="helperPanel">
+  </div><!-- /main-layout -->
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       CHAT SIDEBAR (280px, slides in from right)
+  ═══════════════════════════════════════════════════════ -->
+  <div class="chat-sidebar" id="chatSidebar">
+
+    <!-- Tab bar -->
+    <div class="chat-sidebar-header">
+      <div class="chat-tabs" id="chatTabs">
+        <!-- tabs populated dynamically -->
+      </div>
+      <button class="chat-new-tab-btn" id="chatNewTabBtn" title="New chat">
+        <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <!-- Messages -->
     <div class="chat-messages" id="chatMessages"></div>
+
+    <!-- Input area -->
     <div class="chat-input-area">
-
-      <!-- Context bubbles — appear above input when context is added -->
       <div class="ctx-bubbles hidden" id="ctxBubbles"></div>
-
       <div class="chat-input-row">
-        <!-- Context add button + dropdown -->
         <div class="ctx-add-wrap">
           <button class="ctx-add-btn" id="ctxAddBtn" title="Add context">
             <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -170,8 +238,7 @@
           <div class="ctx-dropdown hidden" id="ctxDropdown">
             <button class="ctx-opt" data-ctx="dom">DOM Snapshot</button>
             <button class="ctx-opt" data-ctx="css">Existing CSS</button>
-            <button class="ctx-opt" data-ctx="screenshot">Screenshot</button>
-            <button class="ctx-opt" data-ctx="designref">Design Ref</button>
+            <button class="ctx-opt" data-ctx="screenshot">Take Screenshot</button>
           </div>
         </div>
         <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask anything about the page…"></textarea>
@@ -179,80 +246,41 @@
           <svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
-
-      <span class="chat-token-count" id="chatTokenCount"></span>
-
-    </div>
-  </div>
-
-  <!-- ─── CSS IDE Panel ─── -->
-  <div class="css-ide-panel" id="cssIdePanel">
-    <div class="css-ide-toolbar">
-      <button class="btn-secondary btn-sm" id="cssIdeRefresh" title="Reload CSS from site">
-        <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
-          <path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        Fetch
-      </button>
-      <button class="btn-secondary btn-sm" id="cssIdeSearchBtn" title="Find (Ctrl+F)">
-        <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
-          <circle cx="5.5" cy="5.5" r="3.5" stroke="currentColor" stroke-width="1.4"/>
-          <path d="M8.5 8.5l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-        </svg>
-        Find
-      </button>
-      <span class="css-ide-meta" id="cssIdeMeta"></span>
-    </div>
-    <div class="css-ide-search hidden" id="cssIdeSearch">
-      <button class="css-ide-search-ai-toggle" id="cssIdeSearchAiToggle" title="Toggle AI smart search">✦</button>
-      <input type="text" class="css-ide-search-input" id="cssIdeSearchInput" placeholder="Find in CSS…" spellcheck="false" autocomplete="off">
-      <span class="css-ide-search-count" id="cssIdeSearchCount"></span>
-      <button class="css-ide-search-nav" id="cssIdeSearchPrev" title="Previous (Shift+Enter)">
-        <svg viewBox="0 0 10 10" fill="none"><path d="M2 6.5l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button class="css-ide-search-nav" id="cssIdeSearchNext" title="Next (Enter)">
-        <svg viewBox="0 0 10 10" fill="none"><path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button class="css-ide-search-close" id="cssIdeSearchClose" title="Close (Esc)">
-        <svg viewBox="0 0 10 10" fill="none"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      </button>
-    </div>
-    <div class="css-ide-editor-wrap" id="cssIdeEditorWrap">
-      <textarea id="cssIdeTextarea" class="visually-hidden"></textarea>
-    </div>
-    <div class="css-ide-footer">
-      <span class="css-ide-status" id="cssIdeStatus"></span>
-      <div class="css-ide-actions">
-        <button class="icon-btn" id="cssIdeReloadPage" title="Refresh Page">
-          <svg viewBox="0 0 16 16" fill="none">
-            <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <path d="M11 6h2.5v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        <button class="btn-primary btn-sm" id="cssIdePublish">Publish</button>
+      <div class="chat-input-footer">
+        <label class="make-changes-toggle-label" id="makeChangesToggleLabel">
+          <input type="checkbox" id="makeChangesCheck" class="visually-hidden">
+          <span class="mc-track"><span class="mc-thumb"></span></span>
+          <span class="mc-text">Make Changes</span>
+        </label>
+        <span class="chat-token-count" id="chatTokenCount"></span>
       </div>
     </div>
-  </div>
 
-  <!-- ─── Docs Panel ─── -->
+  </div><!-- /chat-sidebar -->
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       FULL-WINDOW OVERLAYS
+  ═══════════════════════════════════════════════════════ -->
+
+  <!-- ─── Docs Overlay ─── -->
   <div class="docs-panel hidden" id="docsPanel">
+    <div class="docs-panel-header">
+      <span class="docs-panel-title">Docs</span>
+      <button class="icon-btn" id="closeDocs" title="Close">
+        <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
     <div class="docs-scroll">
-
-      <!-- Pinned / hardcoded links -->
       <div class="docs-section">
         <div class="docs-section-head">Pinned Resources</div>
         <div class="docs-pinned-list" id="docsPinnedList"></div>
       </div>
-
-      <!-- User-saved docs -->
       <div class="docs-section">
         <div class="docs-section-head">My Docs</div>
         <div class="docs-user-list" id="docsUserList"></div>
       </div>
-
     </div>
-
-    <!-- Add doc form (hidden until Add Doc clicked) -->
     <div class="docs-add-form hidden" id="docsAddForm">
       <input class="input docs-form-input" id="docsFormTitle" type="text" placeholder="Title" autocomplete="off">
       <input class="input docs-form-input" id="docsFormUrl" type="url" placeholder="https://…" autocomplete="off">
@@ -261,82 +289,9 @@
         <button class="btn-primary btn-sm" id="docsFormSave">Save</button>
       </div>
     </div>
-
     <div class="docs-footer">
       <button class="btn-secondary btn-sm" id="docsAddBtn">+ Add Doc</button>
     </div>
-  </div>
-
-  <!-- ─── Status Bar ─── -->
-  <div class="statusbar" id="statusBar">
-
-    <!-- AI Provider -->
-    <div class="statusbar-item" id="sbProviderWrap">
-      <button class="statusbar-btn" id="sbProviderBtn">
-        <img class="sb-model-icon" id="sbProviderIcon" src="icons/models/claude.png" alt="" onerror="this.style.display='none'">
-        <span id="sbProviderLabel">Claude</span>
-        <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <div class="statusbar-popover hidden" id="sbProviderPopover">
-        <button class="sb-popover-item" data-value="claude">
-          <img src="icons/models/claude.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
-          <span>Claude</span>
-          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <button class="sb-popover-item" data-value="deepseek">
-          <img src="icons/models/deepseek.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
-          <span>DeepSeek</span>
-          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <button class="sb-popover-item" data-value="openai">
-          <img src="icons/models/openai.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
-          <span>OpenAI</span>
-          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <button class="sb-popover-item" data-value="ollama">
-          <img src="icons/models/ollama.png" class="sb-model-icon" alt="" onerror="this.style.display='none'">
-          <span>Ollama</span>
-          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>
-    </div>
-
-    <!-- Model (hidden for Ollama) — sep lives inside so it hides with the item -->
-    <div class="statusbar-item hidden" id="sbModelWrap">
-      <div class="sb-sep"></div>
-      <button class="statusbar-btn" id="sbModelBtn">
-        <span id="sbModelLabel">Sonnet 4.6</span>
-        <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <div class="statusbar-popover hidden" id="sbModelPopover">
-        <!-- populated dynamically -->
-      </div>
-    </div>
-
-    <!-- CSS tab shortcut hint -->
-    <span class="sb-shortcut-hint hidden" id="sbShortcutHint">
-      <kbd id="sbShortcutKey">Ctrl+I</kbd> to <span class="sb-shortcut-star">✦</span> edit
-    </span>
-
-    <!-- Mode: Patch / Full Rewrite — only on Agent tab -->
-    <div class="statusbar-item hidden" id="sbModeWrap">
-      <div class="sb-sep"></div>
-      <button class="statusbar-btn" id="sbModeBtn">
-        <span id="sbModeLabel">Full Rewrite</span>
-        <svg class="sb-chevron" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <div class="statusbar-popover hidden" id="sbModePopover">
-        <button class="sb-popover-item" data-value="full">
-          <span>Full Rewrite</span>
-          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <button class="sb-popover-item" data-value="patch">
-          <span>Patch Mode</span>
-          <svg class="sb-check hidden" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>
-    </div>
-
   </div>
 
   <!-- ─── Settings Panel (overlay) ─── -->
@@ -373,16 +328,7 @@
           <button class="toggle-opt active" data-value="full">Full Rewrite</button>
           <button class="toggle-opt" data-value="patch">Patch</button>
         </div>
-        <span class="field-hint">Full Rewrite: returns the entire file — supports adds/edits/deletes. Patch: returns only changed rules — faster, fewer tokens.</span>
-      </div>
-
-      <!-- Auto-publish toggle -->
-      <div class="field-group">
-        <label class="settings-toggle-row">
-          <input type="checkbox" id="autoPublish" class="visually-hidden">
-          <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
-          <span class="settings-toggle-label">Auto-publish after applying CSS</span>
-        </label>
+        <span class="field-hint">Full Rewrite returns the entire stylesheet. Patch returns only changed rules — faster and cheaper.</span>
       </div>
 
       <!-- CSS line wrap toggle -->
@@ -394,40 +340,44 @@
         </label>
       </div>
 
+      <!-- Design Reference -->
+      <div class="field-group">
+        <label class="field-label">Design Reference</label>
+        <div id="settingsDesignRefEmpty">
+          <button class="btn-secondary btn-sm" id="settingsDesignRefBrowse">Upload Image</button>
+          <span class="field-hint">Reference image sent to the AI for style matching</span>
+        </div>
+        <div class="settings-design-ref-preview hidden" id="settingsDesignRefPreview">
+          <img id="settingsDesignRefThumb" class="settings-design-ref-thumb" alt="Design ref">
+          <span class="settings-design-ref-name" id="settingsDesignRefName">design-ref.png</span>
+          <button class="ctx-remove" id="settingsDesignRefClear" title="Remove">
+            <svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+
       <!-- ── Claude Settings ── -->
       <div class="settings-section" id="claudeConfig">
         <div class="settings-section-head">Claude</div>
-
         <div class="field-group">
           <label class="field-label" for="claudeApiKey">API Key</label>
           <div class="settings-input-row">
             <input type="password" id="claudeApiKey" class="input" placeholder="sk-ant-...">
             <button class="settings-icon-btn" id="claudeKeyView" title="Show / hide key">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="M2 8c1.8-4 10.2-4 12 0-1.8 4-10.2 4-12 0z" stroke="currentColor" stroke-width="1.3"/>
-                <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/>
-              </svg>
+              <svg viewBox="0 0 16 16" fill="none"><path d="M2 8c1.8-4 10.2-4 12 0-1.8 4-10.2 4-12 0z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/></svg>
             </button>
             <button class="settings-icon-btn" id="claudeKeyCopy" title="Copy key">
-              <svg viewBox="0 0 16 16" fill="none">
-                <rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-                <path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <svg viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
         </div>
-
         <div class="field-group">
           <div class="settings-verify-row">
-            <button class="btn-secondary btn-sm" id="verifyClaudeKey">
-              <span class="settings-status-dot" id="claudeStatusDot"></span>
-              Verify API Key
-            </button>
+            <button class="btn-secondary btn-sm" id="verifyClaudeKey"><span class="settings-status-dot" id="claudeStatusDot"></span>Verify API Key</button>
             <button class="btn-text-link" id="getClaudeKey">Get API Key ↗</button>
             <span class="settings-verify-msg hidden" id="claudeVerifyMsg"></span>
           </div>
         </div>
-
         <div class="field-group">
           <label class="field-label" for="claudeModel">Model</label>
           <select id="claudeModel" class="input select-input">
@@ -444,81 +394,57 @@
       <!-- ── DeepSeek Settings ── -->
       <div class="settings-section hidden" id="deepseekConfig">
         <div class="settings-section-head">DeepSeek</div>
-
         <div class="field-group">
           <label class="field-label" for="deepseekApiKey">API Key</label>
           <div class="settings-input-row">
             <input type="password" id="deepseekApiKey" class="input" placeholder="sk-...">
             <button class="settings-icon-btn" id="deepseekKeyView" title="Show / hide key">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="M2 8c1.8-4 10.2-4 12 0-1.8 4-10.2 4-12 0z" stroke="currentColor" stroke-width="1.3"/>
-                <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/>
-              </svg>
+              <svg viewBox="0 0 16 16" fill="none"><path d="M2 8c1.8-4 10.2-4 12 0-1.8 4-10.2 4-12 0z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/></svg>
             </button>
             <button class="settings-icon-btn" id="deepseekKeyCopy" title="Copy key">
-              <svg viewBox="0 0 16 16" fill="none">
-                <rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-                <path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <svg viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
         </div>
-
         <div class="field-group">
           <div class="settings-verify-row">
-            <button class="btn-secondary btn-sm" id="verifyDeepseekKey">
-              <span class="settings-status-dot" id="deepseekStatusDot"></span>
-              Verify API Key
-            </button>
+            <button class="btn-secondary btn-sm" id="verifyDeepseekKey"><span class="settings-status-dot" id="deepseekStatusDot"></span>Verify API Key</button>
             <button class="btn-text-link" id="getDeepseekKey">Get API Key ↗</button>
             <span class="settings-verify-msg hidden" id="deepseekVerifyMsg"></span>
           </div>
         </div>
-
         <div class="field-group">
           <label class="field-label" for="deepseekModel">Model</label>
           <select id="deepseekModel" class="input select-input">
             <option value="deepseek-v4-flash" selected>V4 Flash (recommended) — $0.14 / $0.28 per 1M</option>
             <option value="deepseek-v4-pro">V4 Pro — $0.435 / $0.87 per 1M*</option>
           </select>
-          <span class="field-hint">*V4 Pro is text-only with extended thinking. Prices are discounted (through May 31, 2026).</span>
+          <span class="field-hint">*V4 Pro is text-only with extended thinking. Prices discounted through May 2026.</span>
         </div>
       </div>
 
       <!-- ── OpenAI Settings ── -->
       <div class="settings-section hidden" id="openaiConfig">
         <div class="settings-section-head">OpenAI</div>
-
         <div class="field-group">
           <label class="field-label" for="openaiApiKey">API Key</label>
           <div class="settings-input-row">
             <input type="password" id="openaiApiKey" class="input" placeholder="sk-...">
             <button class="settings-icon-btn" id="openaiKeyView" title="Show / hide key">
-              <svg viewBox="0 0 16 16" fill="none">
-                <path d="M2 8c1.8-4 10.2-4 12 0-1.8 4-10.2 4-12 0z" stroke="currentColor" stroke-width="1.3"/>
-                <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/>
-              </svg>
+              <svg viewBox="0 0 16 16" fill="none"><path d="M2 8c1.8-4 10.2-4 12 0-1.8 4-10.2 4-12 0z" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.3"/></svg>
             </button>
             <button class="settings-icon-btn" id="openaiKeyCopy" title="Copy key">
-              <svg viewBox="0 0 16 16" fill="none">
-                <rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-                <path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <svg viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
           </div>
         </div>
-
         <div class="field-group">
           <div class="settings-verify-row">
-            <button class="btn-secondary btn-sm" id="verifyOpenaiKey">
-              <span class="settings-status-dot" id="openaiStatusDot"></span>
-              Verify API Key
-            </button>
+            <button class="btn-secondary btn-sm" id="verifyOpenaiKey"><span class="settings-status-dot" id="openaiStatusDot"></span>Verify API Key</button>
             <button class="btn-text-link" id="getOpenaiKey">Get API Key ↗</button>
             <span class="settings-verify-msg hidden" id="openaiVerifyMsg"></span>
           </div>
         </div>
-
         <div class="field-group">
           <label class="field-label" for="openaiModel">Model</label>
           <select id="openaiModel" class="input select-input">
@@ -534,31 +460,23 @@
       <!-- ── Ollama Settings ── -->
       <div class="settings-section hidden" id="ollamaConfig">
         <div class="settings-section-head">Ollama</div>
-
         <div class="field-group">
           <label class="field-label" for="ollamaUrl">Server URL</label>
           <div class="settings-input-row">
             <input type="text" id="ollamaUrl" class="input" placeholder="http://localhost:11434">
-            <button class="btn-secondary btn-sm" id="testOllama">
-              <span class="settings-status-dot" id="ollamaStatusDot"></span>
-              Test
-            </button>
+            <button class="btn-secondary btn-sm" id="testOllama"><span class="settings-status-dot" id="ollamaStatusDot"></span>Test</button>
           </div>
           <span class="settings-verify-msg hidden" id="ollamaTestStatus"></span>
         </div>
-
         <div class="field-group">
           <label class="field-label" for="ollamaModel">Text Model</label>
           <input type="text" id="ollamaModel" class="input" placeholder="llama3">
         </div>
-
         <div class="field-group">
           <label class="field-label" for="ollamaVisionModel">Vision Model</label>
           <input type="text" id="ollamaVisionModel" class="input" placeholder="llava">
           <span class="field-hint">Used when a screenshot or design ref is attached</span>
         </div>
-
-        <!-- Cloudflare toggle -->
         <div class="field-group">
           <label class="settings-toggle-row">
             <input type="checkbox" id="cfEnabled" class="visually-hidden">
@@ -566,8 +484,6 @@
             <span class="settings-toggle-label">Use Cloudflare session tokens?</span>
           </label>
         </div>
-
-        <!-- CF sub-fields -->
         <div class="settings-sub-section hidden" id="cfFields">
           <div class="field-group">
             <label class="field-label" for="cfClientId">Client ID</label>
@@ -579,15 +495,11 @@
           </div>
           <div class="field-group">
             <div class="settings-verify-row">
-              <button class="btn-secondary btn-sm" id="verifyCf">
-                <span class="settings-status-dot" id="cfStatusDot"></span>
-                Verify Credentials
-              </button>
+              <button class="btn-secondary btn-sm" id="verifyCf"><span class="settings-status-dot" id="cfStatusDot"></span>Verify Credentials</button>
               <span class="settings-verify-msg hidden" id="cfVerifyMsg"></span>
             </div>
           </div>
         </div>
-
       </div>
 
     </div><!-- /settings-body -->
@@ -611,7 +523,7 @@
       <button class="btn-primary btn-sm" id="saveExitSettings">Save &amp; Exit</button>
     </div>
 
-    <!-- Backups overlay (slides over settings body) -->
+    <!-- Backups overlay -->
     <div class="backups-overlay hidden" id="backupsOverlay">
       <div class="settings-header">
         <button class="icon-btn" id="backBackups" title="Back to settings">
@@ -625,7 +537,7 @@
       </div>
     </div>
 
-  </div>
+  </div><!-- /settings-panel -->
 
   <!-- Tab mismatch overlay -->
   <div class="tab-mismatch-overlay hidden" id="tabMismatchOverlay">
@@ -641,6 +553,10 @@
       <button class="btn-text-muted" id="tabMismatchReset">Use This Tab Instead</button>
     </div>
   </div>
+
+  <!-- Hidden file inputs -->
+  <input type="file" id="designRefInput" accept="image/*" class="visually-hidden">
+  <input type="file" id="settingsDesignRefInput" accept="image/*" class="visually-hidden">
 
   <script src="libs/codemirror/codemirror.min.js"></script>
   <script src="libs/codemirror/css.min.js"></script>

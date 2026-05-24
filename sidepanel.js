@@ -68,18 +68,17 @@ async function init() {
 
   await loadSettings();
   await loadDesignRef();
-  setupContextDrawer();
-  setupMainTabs();
   setupStatusBar();
-  updateStatusBarMode('css'); // CSS is the default active tab
+  updateStatusBarMode();
   setupSettings();
   setupSetupTab();
-  setupWorkflowTab();
-  setupScopeButtons();
-  setupHelper();
+  setupDesignRefSettings();
+  setupAgentFlap();
+  setupChatSidebar();
+  setupChatTabs();
   setupCssIde();
   loadCssIde();
-  setupDocsTab();
+  setupDocsOverlay();
   setupTabMismatch();
   listenForTabChanges();
 }
@@ -673,7 +672,6 @@ async function doSaveSettings() {
     cfEnabled,
     cfClientId:       cfEnabled ? document.getElementById('cfClientId').value.trim()   : '',
     cfClientSecret:   cfEnabled ? document.getElementById('cfClientSecret').value.trim() : '',
-    autoPublish:      document.getElementById('autoPublish').checked,
     cssLineWrap:      document.getElementById('cssLineWrap').checked,
     maxRollbacks:     100,
     cssMode,
@@ -873,7 +871,6 @@ function applySettingsToForm(s) {
   document.getElementById('ollamaVisionModel').value = s.ollamaVisionModel || 'llava';
   document.getElementById('cfClientId').value        = s.cfClientId || '';
   document.getElementById('cfClientSecret').value    = s.cfClientSecret || '';
-  document.getElementById('autoPublish').checked     = !!s.autoPublish;
   const lineWrap = s.cssLineWrap !== false; // default true
   document.getElementById('cssLineWrap').checked = lineWrap;
   if (cssIdeEditor) cssIdeEditor.setOption('lineWrapping', lineWrap);
@@ -1636,13 +1633,16 @@ function setLoading(btn, loading, text) {
 }
 
 function showError(msg) {
+  console.error('[SyncStyler]', msg);
   const box = document.getElementById('errorBox');
+  if (!box) return;
   box.textContent = msg;
   box.classList.remove('hidden');
 }
 
 function clearError() {
-  document.getElementById('errorBox').classList.add('hidden');
+  const box = document.getElementById('errorBox');
+  if (box) box.classList.add('hidden');
 }
 
 // ─── CSS IDE ──────────────────────────────────────────────────────────────────
@@ -2059,9 +2059,17 @@ function docTypeIcon(url) {
   </svg>`;
 }
 
-function setupDocsTab() {
+function setupDocsOverlay() {
   renderPinnedDocs();
   loadUserDocs();
+
+  // Open / close
+  document.getElementById('openDocs').addEventListener('click', () => {
+    document.getElementById('docsPanel').classList.remove('hidden');
+  });
+  document.getElementById('closeDocs').addEventListener('click', () => {
+    document.getElementById('docsPanel').classList.add('hidden');
+  });
 
   document.getElementById('docsAddBtn').addEventListener('click', openDocsAddForm);
   document.getElementById('docsFormCancel').addEventListener('click', closeDocsForm);
@@ -2306,15 +2314,12 @@ function updateStatusBar(settings) {
 
 const SB_IS_MAC = navigator.platform.startsWith('Mac') || navigator.userAgent.includes('Mac OS');
 
-function updateStatusBarMode(panel) {
-  document.getElementById('sbModeWrap').classList.toggle('hidden', panel !== 'agent');
-  document.getElementById('statusBar').classList.toggle('hidden', panel === 'docs');
-
-  const hint = document.getElementById('sbShortcutHint');
-  hint.classList.toggle('hidden', panel !== 'css');
-  if (panel === 'css') {
-    document.getElementById('sbShortcutKey').textContent = SB_IS_MAC ? '⌘i' : 'Ctrl+i';
-  }
+function updateStatusBarMode() {
+  // In the new layout, the status bar and all its items are always visible.
+  document.getElementById('sbModeWrap').classList.remove('hidden');
+  document.getElementById('statusBar').classList.remove('hidden');
+  document.getElementById('sbShortcutHint').classList.remove('hidden');
+  document.getElementById('sbShortcutKey').textContent = SB_IS_MAC ? '⌘i' : 'Ctrl+i';
 }
 
 async function saveStatusBarSetting(key, value) {
@@ -2593,6 +2598,616 @@ function listenForTabChanges() {
       showTabMismatch(msg.tabTitle);
     }
   });
+}
+
+// ─── Chat Sidebar ─────────────────────────────────────────────────────────────
+
+function setupChatSidebar() {
+  const sidebar = document.getElementById('chatSidebar');
+  const toggleBtn = document.getElementById('toggleChat');
+
+  toggleBtn.addEventListener('click', () => {
+    const isOpen = sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', !isOpen);
+    toggleBtn.classList.toggle('active', !isOpen);
+  });
+
+  // Hook up chat send/input inside sidebar (reuses handleChatSend logic)
+  const input   = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('chatSend');
+
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    updateTokenCounter();
+  });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend(); }
+  });
+  sendBtn.addEventListener('click', handleChatSend);
+
+  // Code copy delegated handler
+  document.getElementById('chatMessages').addEventListener('click', e => {
+    const btn = e.target.closest('.chat-code-copy');
+    if (!btn) return;
+    const code = btn.closest('.chat-code-wrap')?.querySelector('code')?.textContent ?? '';
+    navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    }).catch(() => {});
+  });
+
+  // Context "+" dropdown in sidebar
+  const addBtn   = document.getElementById('ctxAddBtn');
+  const dropdown = document.getElementById('ctxDropdown');
+
+  addBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    refreshCtxDropdownOptions();
+    dropdown.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', () => dropdown.classList.add('hidden'));
+
+  document.querySelectorAll('#ctxDropdown .ctx-opt').forEach(opt => {
+    opt.addEventListener('click', e => {
+      e.stopPropagation();
+      const ctx = opt.dataset.ctx;
+      if (ctx === 'css' && !state.chatContextItems.has('css')) {
+        state.cssContextChars = null;
+        updateTokenCounter();
+        send({ type: 'GET_CSS_CHARS' }).then(r => {
+          state.cssContextChars = r.chars ?? 0;
+          updateTokenCounter();
+        }).catch(() => { state.cssContextChars = 0; });
+      }
+      if (ctx === 'screenshot') handleTakeScreenshotForChat();
+      else {
+        state.chatContextItems.add(ctx);
+        dropdown.classList.add('hidden');
+        renderChatContextBubbles();
+        updateTokenCounter();
+      }
+    });
+  });
+
+  updateTokenCounter();
+}
+
+async function handleTakeScreenshotForChat() {
+  document.getElementById('ctxDropdown').classList.add('hidden');
+  try {
+    const { dataUrl } = await send({ type: 'TAKE_SCREENSHOT' });
+    state.screenshotDataUrl = dataUrl;
+    state.screenshotTime    = new Date();
+    state.chatContextItems.add('screenshot');
+    renderChatContextBubbles();
+    updateTokenCounter();
+  } catch (e) {
+    console.error('[Screenshot]', e.message);
+  }
+}
+
+// ─── Chat Tabs ────────────────────────────────────────────────────────────────
+
+let chatSessions = [];  // [{ id, label, history }]
+let activeChatId = null;
+
+function setupChatTabs() {
+  document.getElementById('chatNewTabBtn').addEventListener('click', () => openNewChatSession());
+  // Start with one session
+  openNewChatSession();
+}
+
+function openNewChatSession(label) {
+  const id = Date.now().toString();
+  chatSessions.push({ id, label: label || `Chat ${chatSessions.length + 1}`, history: [] });
+  activeChatId = id;
+  state.chatHistory = [];
+  state.chatContextItems.clear();
+  state.cssContextChars = null;
+  document.getElementById('chatMessages').innerHTML = '';
+  document.getElementById('chatInput').value = '';
+  renderChatContextBubbles();
+  updateTokenCounter();
+  renderChatTabs();
+}
+
+function switchChatSession(id) {
+  // Save current history
+  const current = chatSessions.find(s => s.id === activeChatId);
+  if (current) current.history = [...state.chatHistory];
+
+  // Load new session
+  const next = chatSessions.find(s => s.id === id);
+  if (!next) return;
+  activeChatId = id;
+  state.chatHistory = [...next.history];
+  state.chatContextItems.clear();
+  state.cssContextChars = null;
+  // Rebuild messages from history
+  document.getElementById('chatMessages').innerHTML = '';
+  for (const msg of state.chatHistory) {
+    appendChatMessage(msg.role, typeof msg.content === 'string' ? msg.content : '');
+  }
+  renderChatContextBubbles();
+  updateTokenCounter();
+  renderChatTabs();
+}
+
+function closeChatSession(id) {
+  chatSessions = chatSessions.filter(s => s.id !== id);
+  if (!chatSessions.length) { openNewChatSession(); return; }
+  if (activeChatId === id) switchChatSession(chatSessions[chatSessions.length - 1].id);
+  else renderChatTabs();
+}
+
+function renderChatTabs() {
+  const container = document.getElementById('chatTabs');
+  container.innerHTML = '';
+  chatSessions.forEach(session => {
+    const tab = document.createElement('button');
+    tab.className = 'chat-tab' + (session.id === activeChatId ? ' active' : '');
+    tab.innerHTML = `<span>${escapeHtml(session.label)}</span><span class="chat-tab-close">×</span>`;
+    tab.addEventListener('click', e => {
+      if (e.target.classList.contains('chat-tab-close')) {
+        e.stopPropagation();
+        closeChatSession(session.id);
+      } else {
+        switchChatSession(session.id);
+      }
+    });
+    container.appendChild(tab);
+  });
+}
+
+// ─── Agent Flap ───────────────────────────────────────────────────────────────
+
+function setupAgentFlap() {
+  const flap   = document.getElementById('agentFlap');
+  const handle = document.getElementById('agentFlapHandle');
+  const body   = document.getElementById('agentFlapBody');
+
+  handle.addEventListener('click', () => {
+    const isOpen = flap.classList.contains('open');
+    flap.classList.toggle('open', !isOpen);
+    // body visibility driven by CSS max-height transition via .open class
+  });
+
+  // Context "+" dropdown in agent flap
+  const agentAddBtn  = document.getElementById('agentCtxAddBtn');
+  const agentDropdown = document.getElementById('agentCtxDropdown');
+
+  agentAddBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    agentDropdown.classList.toggle('hidden');
+  });
+  document.addEventListener('click', () => agentDropdown.classList.add('hidden'));
+
+  const agentCtxItems = new Set();
+
+  agentDropdown.querySelectorAll('.ctx-opt').forEach(opt => {
+    opt.addEventListener('click', async e => {
+      e.stopPropagation();
+      agentDropdown.classList.add('hidden');
+      const ctx = opt.dataset.ctx;
+      if (ctx === 'screenshot') {
+        try {
+          const { dataUrl } = await send({ type: 'TAKE_SCREENSHOT' });
+          state.screenshotDataUrl = dataUrl;
+          state.screenshotTime    = new Date();
+          agentCtxItems.add('screenshot');
+        } catch (_) {}
+      } else {
+        agentCtxItems.add(ctx);
+      }
+      renderAgentCtxBubbles(agentCtxItems);
+    });
+  });
+
+  // Send button
+  const sendBtn = document.getElementById('agentFlapSend');
+  const stopBtn = document.getElementById('agentFlapStop');
+  const textarea = document.getElementById('agentFlapInput');
+
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitAgentFlap(); }
+  });
+  sendBtn.addEventListener('click', submitAgentFlap);
+  stopBtn.addEventListener('click', () => {
+    if (state.generatePort) {
+      state.stopping = true;
+      state.generatePort.disconnect();
+      state.generatePort = null;
+    }
+    setAgentFlapLoading(false);
+  });
+
+  // Reconsolidate
+  document.getElementById('reconsolidate').addEventListener('click', () => {
+    submitAgentFlapRequest('__reconsolidate__', new Set());
+  });
+}
+
+function renderAgentCtxBubbles(items) {
+  const container = document.getElementById('agentCtxBubbles');
+  container.innerHTML = '';
+  const labels = { dom: 'DOM', css: 'CSS', screenshot: 'Screenshot' };
+  for (const ctx of items) {
+    const bubble = document.createElement('span');
+    bubble.className = 'ctx-bubble';
+    bubble.innerHTML = `${labels[ctx] || ctx}<button class="ctx-bubble-remove" title="Remove">×</button>`;
+    bubble.querySelector('.ctx-bubble-remove').addEventListener('click', () => {
+      items.delete(ctx);
+      renderAgentCtxBubbles(items);
+    });
+    container.appendChild(bubble);
+  }
+  container.classList.toggle('hidden', items.size === 0);
+}
+
+function submitAgentFlap() {
+  const instructions = document.getElementById('agentFlapInput').value.trim();
+  if (!instructions) return;
+  // Gather agent context items
+  const agentCtxItems = new Set();
+  document.querySelectorAll('#agentCtxBubbles .ctx-bubble').forEach(b => {
+    const text = b.childNodes[0]?.textContent?.trim().toLowerCase();
+    if (text === 'dom')        agentCtxItems.add('dom');
+    if (text === 'css')        agentCtxItems.add('css');
+    if (text === 'screenshot') agentCtxItems.add('screenshot');
+  });
+  submitAgentFlapRequest(instructions, agentCtxItems);
+}
+
+function submitAgentFlapRequest(instructions, agentCtxItems) {
+  // Open chat sidebar and create new session for this request
+  const sidebar = document.getElementById('chatSidebar');
+  sidebar.classList.add('open');
+  document.getElementById('toggleChat').classList.add('active');
+  openNewChatSession('✦ Changes');
+
+  // Show user message in chat
+  appendChatMessage('user', instructions === '__reconsolidate__' ? 'Fully Reconsolidate CSS' : instructions);
+
+  setAgentFlapLoading(true);
+  state.stopping = false;
+
+  const assistantEl = appendChatMessage('assistant', '');
+  assistantEl.classList.add('streaming');
+  assistantEl.innerHTML = '<span class="chat-thinking">Uploading…</span>';
+
+  let agentBuffer = '';
+  let agentPhase  = 'uploading';
+  const port = chrome.runtime.connect({ name: 'generate' });
+  state.generatePort = port;
+
+  port.onMessage.addListener(msg => {
+    if (msg.type === 'CSS_CHUNK') {
+      agentBuffer += msg.text;
+      if (agentPhase === 'uploading') agentPhase = 'thinking';
+      if (agentPhase === 'thinking' && agentBuffer.includes('<css>')) agentPhase = 'generating';
+      assistantEl.innerHTML = `<span class="chat-thinking">${agentPhase === 'generating' ? 'Generating' : 'Thinking'}… (${agentBuffer.length} chars)</span>`;
+    } else if (msg.type === 'CSS_DONE') {
+      assistantEl.classList.remove('streaming');
+      const newCss = msg.css || '';
+      const cost   = (msg.inputTokens || msg.outputTokens) ? calcCost(msg.inputTokens, msg.outputTokens) : null;
+      assistantEl.innerHTML = renderChatMarkdown(
+        `Changes generated.${cost !== null ? ' ' + fmtCost(cost).trim() : ''}`
+      );
+      setAgentFlapLoading(false);
+      document.getElementById('agentFlapInput').value = '';
+      // Enter diff mode in the CSS editor
+      enterDiffMode(newCss, msg.originalCss || '');
+    } else if (msg.type === 'CSS_ERROR') {
+      assistantEl.classList.remove('streaming');
+      assistantEl.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(msg.error)}</span>`;
+      setAgentFlapLoading(false);
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (!state.stopping) {
+      assistantEl.classList.remove('streaming');
+    }
+    setAgentFlapLoading(false);
+    state.generatePort = null;
+  });
+
+  port.postMessage({
+    type: 'GENERATE_CSS',
+    instructions,
+    screenshotDataUrl: agentCtxItems.has('screenshot') ? state.screenshotDataUrl : null,
+    designRefDataUrl:  state.designRefDataUrl,
+    history: [],
+    siteTabId: state.siteTabId ?? null,
+    stepScope: null,
+  });
+}
+
+function setAgentFlapLoading(loading) {
+  const send = document.getElementById('agentFlapSend');
+  const stop = document.getElementById('agentFlapStop');
+  const input = document.getElementById('agentFlapInput');
+  send.classList.toggle('hidden', loading);
+  stop.classList.toggle('hidden', !loading);
+  input.disabled = loading;
+}
+
+// ─── Diff Mode ────────────────────────────────────────────────────────────────
+
+let diffHunks = []; // [{ id, oldMark, newMark, widget, chatNode, status: 'pending'|'approved'|'rejected' }]
+
+function enterDiffMode(newCss, originalCss) {
+  if (!cssIdeEditor) return;
+
+  // Load original CSS first if not already loaded
+  const currentCss = originalCss || cssIdeEditor.getValue();
+  exitDiffMode();
+
+  const oldLines = currentCss.split('\n');
+  const newLines = newCss.split('\n');
+  const diff     = computeLineDiff(currentCss.trim(), newCss.trim());
+
+  // Build the new document (old lines with markers, new lines hidden)
+  // Strategy: replace editor content with new CSS, then mark hunks
+  cssIdeEditor.setValue(newCss);
+  cssIdeEditor.clearHistory();
+
+  // Find changed hunks (groups of adjacent add/remove)
+  const hunks = groupDiffHunks(computeLineDiff(currentCss, newCss));
+
+  // Map each hunk into the new document
+  diffHunks = [];
+  let hunkId = 0;
+
+  hunks.forEach(hunk => {
+    const id = 'hunk-' + (hunkId++);
+    // The hunk's line range in the *new* document
+    const startLine = hunk.newStart;
+    const endLine   = hunk.newEnd;
+
+    // Highlight lines
+    for (let ln = startLine; ln <= endLine; ln++) {
+      cssIdeEditor.addLineClass(ln, 'background', 'cm-diff-add-bg');
+    }
+
+    // Build approve/reject widget below the hunk
+    const widgetEl = buildHunkWidget(id, hunk);
+    const lineWidget = cssIdeEditor.addLineWidget(endLine, widgetEl, {
+      above: false, handleMouseEvents: true, noHScroll: true,
+    });
+
+    diffHunks.push({ id, hunk, lineWidget, widgetEl, chatNode: null, status: 'pending', startLine, endLine });
+
+    // Build matching chat node
+    const chatNode = buildChatDiffNode(id, hunk);
+    document.getElementById('chatMessages').appendChild(chatNode);
+    diffHunks[diffHunks.length - 1].chatNode = chatNode;
+    chatNode.scrollIntoView({ block: 'end' });
+  });
+
+  // Show diff mode UI
+  document.getElementById('cssIdeFooter').classList.add('hidden');
+  document.getElementById('diffModeBar').classList.remove('hidden');
+  document.getElementById('diffModeIndicator').classList.remove('hidden');
+  updateDiffModeBar();
+  setupDiffModeBar();
+}
+
+function exitDiffMode() {
+  // Clear all line decorations and widgets
+  diffHunks.forEach(h => {
+    try { h.lineWidget.clear(); } catch (_) {}
+    for (let ln = h.startLine; ln <= h.endLine; ln++) {
+      try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-add-bg'); } catch (_) {}
+    }
+  });
+  diffHunks = [];
+  document.getElementById('cssIdeFooter').classList.remove('hidden');
+  document.getElementById('diffModeBar').classList.add('hidden');
+  document.getElementById('diffModeIndicator').classList.add('hidden');
+}
+
+function groupDiffHunks(diff) {
+  // Group adjacent add/remove lines into hunks, tracking line positions in new doc
+  const hunks   = [];
+  let current   = null;
+  let newLineNo  = 0; // line number in new document
+
+  for (const entry of diff) {
+    if (entry.type === 'same') {
+      if (current) { hunks.push(current); current = null; }
+      newLineNo++;
+    } else if (entry.type === 'add') {
+      if (!current) current = { newStart: newLineNo, newEnd: newLineNo, added: [], removed: [] };
+      current.added.push(entry.line);
+      current.newEnd = newLineNo;
+      newLineNo++;
+    } else { // remove — does not advance new doc line counter
+      if (!current) current = { newStart: newLineNo, newEnd: newLineNo, added: [], removed: [] };
+      current.removed.push(entry.line);
+    }
+  }
+  if (current) hunks.push(current);
+  return hunks;
+}
+
+function buildHunkWidget(id, hunk) {
+  const el = document.createElement('div');
+  el.className = 'diff-hunk-widget';
+  el.dataset.hunkId = id;
+  const addedCount   = hunk.added.length;
+  const removedCount = hunk.removed.length;
+  el.innerHTML = `
+    <div class="diff-hunk-actions">
+      <button class="diff-hunk-approve" data-hunk="${id}">✓ Accept</button>
+      <button class="diff-hunk-reject"  data-hunk="${id}">✕ Reject</button>
+    </div>
+  `;
+  el.querySelector('.diff-hunk-approve').addEventListener('click', () => resolveHunk(id, 'approved'));
+  el.querySelector('.diff-hunk-reject').addEventListener('click',  () => resolveHunk(id, 'rejected'));
+  return el;
+}
+
+function buildChatDiffNode(id, hunk) {
+  const el = document.createElement('div');
+  el.className = 'chat-diff-node';
+  el.dataset.hunkId = id;
+  const a = hunk.added.length, r = hunk.removed.length;
+  el.innerHTML = `
+    <div class="chat-diff-node-header">
+      <span class="chat-diff-node-lines">Lines ~${hunk.newStart + 1}–${hunk.newEnd + 1}</span>
+      <span class="chat-diff-node-count">
+        ${a ? `<span class="diff-added">+${a}</span>` : ''}
+        ${r ? `<span class="diff-removed">−${r}</span>` : ''}
+      </span>
+      <button class="chat-diff-node-jump" data-hunk="${id}">Jump ↗</button>
+    </div>
+    <div class="chat-diff-node-actions">
+      <button class="chat-diff-node-approve" data-hunk="${id}">Accept</button>
+      <button class="chat-diff-node-reject"  data-hunk="${id}">Reject</button>
+    </div>
+  `;
+  el.querySelector('.chat-diff-node-jump').addEventListener('click', () => jumpToHunk(id));
+  el.querySelector('.chat-diff-node-approve').addEventListener('click', () => resolveHunk(id, 'approved'));
+  el.querySelector('.chat-diff-node-reject').addEventListener('click',  () => resolveHunk(id, 'rejected'));
+  return el;
+}
+
+function jumpToHunk(id) {
+  const hunk = diffHunks.find(h => h.id === id);
+  if (!hunk) return;
+  cssIdeEditor.scrollIntoView({ line: hunk.startLine, ch: 0 }, 80);
+  cssIdeEditor.setCursor({ line: hunk.startLine, ch: 0 });
+  cssIdeEditor.focus();
+}
+
+function resolveHunk(id, resolution) {
+  const hunkIdx = diffHunks.findIndex(h => h.id === id);
+  if (hunkIdx === -1) return;
+  const hunk = diffHunks[hunkIdx];
+  if (hunk.status !== 'pending') return;
+
+  hunk.status = resolution;
+
+  if (resolution === 'rejected') {
+    // Replace added lines with removed lines
+    const from = { line: hunk.startLine, ch: 0 };
+    const to   = { line: hunk.endLine, ch: cssIdeEditor.getLine(hunk.endLine)?.length || 0 };
+    const replacement = hunk.hunk.removed.join('\n');
+    cssIdeEditor.replaceRange(replacement, from, to);
+    // Recalculate subsequent hunk positions (line delta)
+    const delta = hunk.hunk.removed.length - (hunk.endLine - hunk.startLine + 1);
+    for (let i = hunkIdx + 1; i < diffHunks.length; i++) {
+      diffHunks[i].startLine += delta;
+      diffHunks[i].endLine   += delta;
+    }
+  }
+
+  // Remove highlight lines
+  for (let ln = hunk.startLine; ln <= hunk.endLine; ln++) {
+    try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-add-bg'); } catch (_) {}
+  }
+
+  // Remove hunk widget
+  try { hunk.lineWidget.clear(); } catch (_) {}
+
+  // Update chat node
+  if (hunk.chatNode) {
+    hunk.chatNode.classList.add('resolved', resolution === 'approved' ? 'resolved-approve' : 'resolved-reject');
+    const actions = hunk.chatNode.querySelector('.chat-diff-node-actions');
+    if (actions) actions.innerHTML = `<span style="font-size:11px;color:var(--text-secondary);padding:4px 8px;">${resolution === 'approved' ? '✓ Accepted' : '✕ Rejected'}</span>`;
+  }
+
+  updateDiffModeBar();
+
+  // If all hunks resolved, exit diff mode after short delay
+  if (diffHunks.every(h => h.status !== 'pending')) {
+    setTimeout(() => exitDiffMode(), 600);
+  } else {
+    // Auto-scroll to next pending hunk
+    scrollToNextPendingHunk(hunkIdx);
+  }
+}
+
+function scrollToNextPendingHunk(fromIdx) {
+  for (let i = fromIdx + 1; i < diffHunks.length; i++) {
+    if (diffHunks[i].status === 'pending') {
+      setTimeout(() => jumpToHunk(diffHunks[i].id), 150);
+      return;
+    }
+  }
+}
+
+function updateDiffModeBar() {
+  const pending = diffHunks.filter(h => h.status === 'pending').length;
+  const total   = diffHunks.length;
+  const el = document.getElementById('diffHunkCount');
+  if (el) el.textContent = `${pending} of ${total} remaining`;
+}
+
+function setupDiffModeBar() {
+  document.getElementById('diffScrollNext').onclick = () => {
+    const first = diffHunks.find(h => h.status === 'pending');
+    if (first) jumpToHunk(first.id);
+  };
+  document.getElementById('diffAcceptAll').onclick = () => {
+    [...diffHunks].filter(h => h.status === 'pending').forEach(h => resolveHunk(h.id, 'approved'));
+  };
+  document.getElementById('diffRejectAll').onclick = () => {
+    [...diffHunks].filter(h => h.status === 'pending').forEach(h => resolveHunk(h.id, 'rejected'));
+  };
+}
+
+// ─── Design Reference in Settings ────────────────────────────────────────────
+
+function setupDesignRefSettings() {
+  const fileInput = document.getElementById('settingsDesignRefInput');
+  const browseBtn = document.getElementById('settingsDesignRefBrowse');
+
+  browseBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) loadDesignRefFileSettings(fileInput.files[0]);
+    fileInput.value = '';
+  });
+
+  document.getElementById('settingsDesignRefClear').addEventListener('click', async () => {
+    state.designRefDataUrl = null;
+    document.getElementById('settingsDesignRefPreview').classList.add('hidden');
+    document.getElementById('settingsDesignRefEmpty').classList.remove('hidden');
+    try { await send({ type: 'CLEAR_DESIGN_REF' }); } catch (_) {}
+  });
+
+  // Reflect current state
+  renderSettingsDesignRef();
+}
+
+function loadDesignRefFileSettings(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = async e => {
+    state.designRefDataUrl = e.target.result;
+    renderSettingsDesignRef();
+    try { await send({ type: 'SAVE_DESIGN_REF', dataUrl: state.designRefDataUrl }); } catch (_) {}
+  };
+  reader.readAsDataURL(file);
+}
+
+function renderSettingsDesignRef() {
+  const hasRef   = !!state.designRefDataUrl;
+  const emptyEl  = document.getElementById('settingsDesignRefEmpty');
+  const prevEl   = document.getElementById('settingsDesignRefPreview');
+  const thumbEl  = document.getElementById('settingsDesignRefThumb');
+  const nameEl   = document.getElementById('settingsDesignRefName');
+  if (!emptyEl || !prevEl) return;
+  emptyEl.classList.toggle('hidden', hasRef);
+  prevEl.classList.toggle('hidden', !hasRef);
+  if (hasRef && thumbEl) thumbEl.src = state.designRefDataUrl;
+  if (nameEl && !hasRef) nameEl.textContent = '';
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
