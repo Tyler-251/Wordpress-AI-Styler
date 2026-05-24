@@ -2605,28 +2605,12 @@ function listenForTabChanges() {
 
 // ─── Chat Sidebar ─────────────────────────────────────────────────────────────
 
-// Tracks pre-chat window width so we can restore it on close
-let _preCheatWindowWidth = null;
-
 function setChatSidebarOpen(open) {
   const sidebar   = document.getElementById('chatSidebar');
   const toggleBtn = document.getElementById('toggleChat');
-  const wasOpen   = sidebar.classList.contains('open');
-  if (open === wasOpen) return;
-
+  if (sidebar.classList.contains('open') === open) return;
   sidebar.classList.toggle('open', open);
   toggleBtn.classList.toggle('active', open);
-
-  // Expand/contract the browser window to make room for the chat panel
-  chrome.windows.getCurrent(win => {
-    if (open) {
-      _preCheatWindowWidth = win.width;
-      chrome.windows.update(win.id, { width: win.width + 280 });
-    } else if (_preCheatWindowWidth !== null) {
-      chrome.windows.update(win.id, { width: _preCheatWindowWidth });
-      _preCheatWindowWidth = null;
-    }
-  });
 }
 
 function setupChatSidebar() {

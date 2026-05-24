@@ -33,6 +33,7 @@ body {
   background: var(--bg-base);
   display: flex;
   flex-direction: row;
+  position: relative; /* anchor for absolutely-positioned chat sidebar */
 }
 
 /* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
@@ -2322,21 +2323,25 @@ kbd#sbShortcutKey {
 /* ─── Chat Sidebar ───────────────────────────────────────────────────────────── */
 
 .chat-sidebar {
-  flex-shrink: 0;
+  /* Absolutely positioned: slides in over the CSS editor from the right.
+     The panel's left border moves left — no layout reflow, no window resize. */
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--border);
   background: var(--bg-base);
+  border-left: 1px solid var(--border);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.45);
   overflow: hidden;
-  /* Collapse to zero width when closed */
-  width: 0;
-  min-width: 0;
-  transition: width 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94),
-              min-width 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  z-index: 50;
+  transform: translateX(100%);
+  transition: transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 .chat-sidebar.open {
-  width: 280px;
-  min-width: 280px;
+  transform: translateX(0);
 }
 
 .chat-sidebar-header {

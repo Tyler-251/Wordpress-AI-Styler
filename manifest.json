@@ -3,7 +3,7 @@
   "name": "Sync Styler",
   "version": "1.0.0",
   "description": "AI-powered WordPress CSS styling assistant for Sync",
-  "permissions": ["activeTab", "tabs", "scripting", "storage", "sidePanel", "webNavigation", "windows"],
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "sidePanel", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "icons": {
     "16":  "icons/icon16.png",
