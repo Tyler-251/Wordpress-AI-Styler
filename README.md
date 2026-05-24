@@ -85,31 +85,7 @@ Navigate to your live site in another tab (or the Customizer preview itself). Cl
 
 > **Tip:** If you switch tabs and the extension loses track of which tab is your site, go to **⚙ Config → Tools → Ensure This Tab is Selected**.
 
-### Step 3 — Generate CSS
-
-Go to the **Agent** tab:
-
-1. Type your styling instructions in the text field — e.g. *"Make the hero section background dark navy and increase the headline font size to 56px"*
-2. Optionally take a **screenshot** or drag in a **design reference image** using the Context drawer
-3. Click **Generate CSS**
-4. The AI will stream back the CSS. Once done, click **Apply Changes** to write it to the Customizer
-
-### Step 4 — Review and publish
-
-After applying, the CSS is live in your Customizer preview. When you're happy:
-
-- Click **Publish** in the Sync Styler toolbar (or the Customizer's own Publish button)
-- Use **Request a Revision** to iterate — the AI retains the full conversation context
-
-### Step 5 — Inline edits (CSS tab)
-
-Switch to the **CSS** tab for a full editor view of your Additional CSS. You can:
-
-- Select any block of CSS and press **Ctrl+i** (or **⌘i** on Mac) to trigger an inline AI rewrite
-- Review the diff (+/− lines) before applying
-- Use **Find** to search by selector or keyword, with optional AI-powered smart search
-
----
+### Step 3 - Workflow
 
 ## Tabs
 
