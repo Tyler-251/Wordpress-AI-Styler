@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Sync Styler",
+  "name": "WP Styler",
   "version": "1.0.0",
-  "description": "AI-powered WordPress CSS styling assistant for Sync",
+  "description": "AI-powered WordPress CSS styling assistant",
   "permissions": ["activeTab", "tabs", "scripting", "storage", "sidePanel", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "icons": {
@@ -17,7 +17,7 @@
     "default_path": "sidepanel.html"
   },
   "action": {
-    "default_title": "Open Sync Styler",
+    "default_title": "Open WP Styler",
     "default_icon": {
       "16":  "icons/icon16.png",
       "48":  "icons/icon48.png",

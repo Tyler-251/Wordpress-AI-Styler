@@ -415,6 +415,59 @@ async function handleChatSend() {
   assistantEl.classList.add('streaming');
   assistantEl.innerHTML = '<span class="chat-thinking">Uploading…</span>';
 
+  // ── Make Changes mode: route through GENERATE_CSS (agent path) ──────────────
+  const makeChanges = document.getElementById('makeChangesCheck')?.checked;
+  if (makeChanges) {
+    let agentPhase  = 'uploading';
+    let agentBuffer = '';
+    const port = chrome.runtime.connect({ name: 'generate' });
+
+    port.onMessage.addListener(msg => {
+      if (msg.type === 'CSS_CHUNK') {
+        agentBuffer += msg.text;
+        if (agentPhase === 'uploading') agentPhase = 'thinking';
+        if (agentPhase === 'thinking' && agentBuffer.includes('<css>')) agentPhase = 'generating';
+        assistantEl.innerHTML = `<span class="chat-thinking">${agentPhase === 'generating' ? 'Generating' : 'Thinking'}… (${agentBuffer.length} chars)</span>`;
+        assistantEl.scrollIntoView({ block: 'end' });
+      } else if (msg.type === 'CSS_DONE') {
+        assistantEl.classList.remove('streaming');
+        assistantEl.innerHTML = renderChatMarkdown('CSS changes ready.');
+        if (msg.inputTokens || msg.outputTokens) {
+          const cost = calcCost(msg.inputTokens, msg.outputTokens);
+          const usage = document.createElement('div');
+          usage.className = 'chat-token-usage';
+          usage.textContent = `↑ ${fmtTokens(msg.inputTokens)} · ↓ ${fmtTokens(msg.outputTokens)}${fmtCost(cost)}`;
+          assistantEl.appendChild(usage);
+        }
+        sendBtn.disabled = false;
+        updateTokenCounter();
+        // enterDiffMode appends diff nodes directly into #chatMessages
+        enterDiffMode(msg.css || '', msg.originalCss || '');
+      } else if (msg.type === 'CSS_ERROR') {
+        assistantEl.classList.remove('streaming');
+        assistantEl.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(msg.error)}</span>`;
+        sendBtn.disabled = false;
+      }
+    });
+
+    port.onDisconnect.addListener(() => {
+      assistantEl.classList.remove('streaming');
+      sendBtn.disabled = false;
+    });
+
+    port.postMessage({
+      type: 'GENERATE_CSS',
+      instructions: text,
+      screenshotDataUrl: activeCtx.has('screenshot') ? state.screenshotDataUrl : null,
+      designRefDataUrl:  activeCtx.has('designref')  ? state.designRefDataUrl  : null,
+      history: [],
+      siteTabId: state.siteTabId ?? null,
+      stepScope: null,
+    });
+    return;
+  }
+
+  // ── Regular chat ────────────────────────────────────────────────────────────
   let buffer = '';
   let chatPhase = 'uploading'; // 'uploading' | 'thinking' | 'generating'
   const port = chrome.runtime.connect({ name: 'chat' });
@@ -440,7 +493,6 @@ async function handleChatSend() {
       } else {
         if (chatPhase !== 'generating') chatPhase = 'generating';
         if (!content.trim()) {
-          // Content extracting but not yet renderable — show Generating status
           assistantEl.innerHTML = `<span class="chat-thinking">Generating… (${buffer.length} chars)</span>`;
         } else {
           assistantEl.innerHTML = renderChatMarkdown(content);
@@ -658,10 +710,14 @@ function closeSettingsPanel() {
 }
 
 async function doSaveSettings() {
-  const backend = document.querySelector('#backendToggle .toggle-opt.active')?.dataset.value || 'claude';
-  const cssMode = document.querySelector('#cssModeToggle .toggle-opt.active')?.dataset.value || 'full';
+  // Start from the currently-stored settings so fields managed outside this
+  // form (e.g. cssMode changed via status bar) are never silently overwritten.
+  const stored  = await send({ type: 'GET_SETTINGS' });
+  const backend = document.querySelector('#backendToggle .toggle-opt.active')?.dataset.value || stored.aiBackend || 'claude';
+  const cssMode = document.querySelector('#cssModeToggle .toggle-opt.active')?.dataset.value || stored.cssMode || 'full';
   const cfEnabled = document.getElementById('cfEnabled').checked;
   const settings = {
+    ...stored,
     aiBackend:        backend,
     claudeApiKey:     document.getElementById('claudeApiKey').value.trim(),
     claudeModel:      document.getElementById('claudeModel').value || 'claude-sonnet-4-6',
@@ -694,6 +750,11 @@ function flashSaveBtn() {
 function setupSettings() {
   document.getElementById('openSettings').addEventListener('click', openSettingsPanel);
 
+  document.getElementById('openHistory').addEventListener('click', () => {
+    openSettingsPanel();
+    document.getElementById('backupsOverlay').classList.remove('hidden');
+  });
+
   document.getElementById('closeSettings').addEventListener('click', closeSettingsPanel);
 
   document.getElementById('saveSettings').addEventListener('click', async () => {
@@ -714,6 +775,7 @@ function setupSettings() {
 
   document.getElementById('backBackups').addEventListener('click', () => {
     document.getElementById('backupsOverlay').classList.add('hidden');
+    closeSettingsPanel();
   });
 
   document.getElementById('clearBackups').addEventListener('click', async () => {
@@ -1659,7 +1721,7 @@ function setupCssIde() {
 
   cssIdeEditor = CodeMirror.fromTextArea(textarea, {
     mode: 'css',
-    theme: 'sync-dark',
+    theme: 'wp-dark',
     lineNumbers: true,
     lineWrapping: true,
     indentWithTabs: false,
@@ -2523,12 +2585,12 @@ function computeLineDiff(oldText, newText) {
   const m = a.length;
   const n = b.length;
 
-  // Guard against O(m×n) blowup on giant blocks
-  if (m * n > 20000) {
-    return [
-      ...a.map(line => ({ type: 'remove', line })),
-      ...b.map(line => ({ type: 'add',    line })),
-    ];
+  // For very large files, run LCS on CSS *blocks* (rule-level) rather than
+  // individual lines — O(B²) where B = number of top-level rules, not O(m×n).
+  // This keeps the diff fast and accurate; any real-world stylesheet has far
+  // fewer blocks than lines.
+  if (m * n > 4_000_000) {
+    return cssBlockLevelDiff(a, b);
   }
 
   // dp[i][j] = LCS length of a[i..] vs b[j..]
@@ -2553,6 +2615,61 @@ function computeLineDiff(oldText, newText) {
       i++;
     } else {
       result.push({ type: 'add', line: b[j] });
+      j++;
+    }
+  }
+  return result;
+}
+
+// Block-level LCS diff for large stylesheets.
+// Groups lines into top-level CSS blocks (by balanced braces), runs LCS on
+// the blocks instead of individual lines, then emits per-line entries.
+// O(B²) where B = number of blocks — typically 50–300 for real stylesheets.
+function cssBlockLevelDiff(aLines, bLines) {
+  function toBlocks(lines) {
+    const blocks = [];
+    let depth = 0, buf = [];
+    for (const line of lines) {
+      buf.push(line);
+      for (const ch of line) {
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      if (depth === 0 && buf.some(l => l.trim())) {
+        blocks.push(buf.join('\n'));
+        buf = [];
+      }
+    }
+    if (buf.some(l => l.trim())) blocks.push(buf.join('\n'));
+    return blocks;
+  }
+
+  const A = toBlocks(aLines);
+  const B = toBlocks(bLines);
+  const M = A.length, N = B.length;
+
+  // LCS on blocks
+  const dp = Array.from({ length: M + 1 }, () => new Int32Array(N + 1));
+  for (let i = M - 1; i >= 0; i--) {
+    for (let j = N - 1; j >= 0; j--) {
+      dp[i][j] = A[i].trim() === B[j].trim()
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  // Walk and emit line-level entries per block
+  const result = [];
+  let i = 0, j = 0;
+  while (i < M || j < N) {
+    if (i < M && j < N && A[i].trim() === B[j].trim()) {
+      for (const line of A[i].split('\n')) result.push({ type: 'same', line });
+      i++; j++;
+    } else if (i < M && (j >= N || dp[i + 1][j] >= dp[i][j + 1])) {
+      for (const line of A[i].split('\n')) result.push({ type: 'remove', line });
+      i++;
+    } else {
+      for (const line of B[j].split('\n')) result.push({ type: 'add', line });
       j++;
     }
   }
@@ -2606,22 +2723,13 @@ function listenForTabChanges() {
 // ─── Chat Sidebar ─────────────────────────────────────────────────────────────
 
 function setChatSidebarOpen(open) {
-  const sidebar   = document.getElementById('chatSidebar');
-  const toggleBtn = document.getElementById('toggleChat');
-  if (sidebar.classList.contains('open') === open) return;
-  sidebar.classList.toggle('open', open);
-  toggleBtn.classList.toggle('active', open);
+  const flap = document.getElementById('agentFlap');
+  if (!flap || flap.classList.contains('open') === open) return;
+  flap.classList.toggle('open', open);
 }
 
 function setupChatSidebar() {
-  const toggleBtn = document.getElementById('toggleChat');
-
-  toggleBtn.addEventListener('click', () => {
-    const isOpen = document.getElementById('chatSidebar').classList.contains('open');
-    setChatSidebarOpen(!isOpen);
-  });
-
-  // Hook up chat send/input inside sidebar (reuses handleChatSend logic)
+  // Chat is now the bottom AI panel — no sidebar toggle button needed
   const input   = document.getElementById('chatInput');
   const sendBtn = document.getElementById('chatSend');
 
@@ -2655,7 +2763,19 @@ function setupChatSidebar() {
   addBtn.addEventListener('click', e => {
     e.stopPropagation();
     refreshCtxDropdownOptions();
+    const wasHidden = dropdown.classList.contains('hidden');
     dropdown.classList.toggle('hidden');
+    if (wasHidden) {
+      // Fixed-position so overflow:hidden on the panel never clips the menu
+      const r = addBtn.getBoundingClientRect();
+      Object.assign(dropdown.style, {
+        position: 'fixed',
+        left:     r.left + 'px',
+        bottom:   (window.innerHeight - r.top + 4) + 'px',
+        top:      'auto',
+        right:    'auto',
+      });
+    }
   });
 
   document.addEventListener('click', () => dropdown.classList.add('hidden'));
@@ -2706,8 +2826,9 @@ let chatSessions = [];
 let activeChatId = null;
 
 function setupChatTabs() {
-  // No auto-create — first session is created lazily when sidebar first opens
-  document.getElementById('chatNewTabBtn').addEventListener('click', () => openNewChatSession());
+  // Tabs removed — sessions managed headlessly; no UI button needed
+  const btn = document.getElementById('chatNewTabBtn');
+  if (btn) btn.addEventListener('click', () => openNewChatSession());
 }
 
 function snapshotCurrentSession() {
@@ -2787,6 +2908,7 @@ function closeChatSession(id) {
 
 function renderChatTabs() {
   const container = document.getElementById('chatTabs');
+  if (!container) return;
   container.innerHTML = '';
   chatSessions.forEach(session => {
     const tab = document.createElement('button');
@@ -2807,67 +2929,44 @@ function renderChatTabs() {
 // ─── Agent Flap ───────────────────────────────────────────────────────────────
 
 function setupAgentFlap() {
-  const flap   = document.getElementById('agentFlap');
-  const handle = document.getElementById('agentFlapHandle');
-  const body   = document.getElementById('agentFlapBody');
+  const flap     = document.getElementById('agentFlap');
+  const handle   = document.getElementById('agentFlapHandle');
+  const resizeEl = document.getElementById('agentFlapResize');
 
+  // ── Toggle open/close ──────────────────────────────────────────────────────
   handle.addEventListener('click', () => {
-    const isOpen = flap.classList.contains('open');
-    flap.classList.toggle('open', !isOpen);
-    // body visibility driven by CSS max-height transition via .open class
+    flap.classList.toggle('open');
   });
 
-  // Context "+" dropdown in agent flap
-  const agentAddBtn  = document.getElementById('agentCtxAddBtn');
-  const agentDropdown = document.getElementById('agentCtxDropdown');
+  // ── Drag-to-resize ─────────────────────────────────────────────────────────
+  let _dragStartY = 0, _dragStartH = 0;
 
-  agentAddBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    agentDropdown.classList.toggle('hidden');
-  });
-  document.addEventListener('click', () => agentDropdown.classList.add('hidden'));
-
-  const agentCtxItems = new Set();
-
-  agentDropdown.querySelectorAll('.ctx-opt').forEach(opt => {
-    opt.addEventListener('click', async e => {
-      e.stopPropagation();
-      agentDropdown.classList.add('hidden');
-      const ctx = opt.dataset.ctx;
-      if (ctx === 'screenshot') {
-        try {
-          const { dataUrl } = await send({ type: 'TAKE_SCREENSHOT' });
-          state.screenshotDataUrl = dataUrl;
-          state.screenshotTime    = new Date();
-          agentCtxItems.add('screenshot');
-        } catch (_) {}
-      } else {
-        agentCtxItems.add(ctx);
-      }
-      renderAgentCtxBubbles(agentCtxItems);
-    });
+  resizeEl.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const body = document.getElementById('agentFlapBody');
+    _dragStartY = e.clientY;
+    _dragStartH = flap.classList.contains('open')
+      ? body.getBoundingClientRect().height
+      : 0;
+    resizeEl.setPointerCapture(e.pointerId);
+    if (!flap.classList.contains('open')) flap.classList.add('open');
+    flap.classList.add('resizing');      // kill transition so height tracks instantly
   });
 
-  // Send button
-  const sendBtn = document.getElementById('agentFlapSend');
-  const stopBtn = document.getElementById('agentFlapStop');
-  const textarea = document.getElementById('agentFlapInput');
-
-  textarea.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitAgentFlap(); }
-  });
-  sendBtn.addEventListener('click', submitAgentFlap);
-  stopBtn.addEventListener('click', () => {
-    if (state.generatePort) {
-      state.stopping = true;
-      state.generatePort.disconnect();
-      state.generatePort = null;
-    }
-    setAgentFlapLoading(false);
+  resizeEl.addEventListener('pointermove', e => {
+    if (!resizeEl.hasPointerCapture(e.pointerId)) return;
+    const delta = _dragStartY - e.clientY;          // positive = dragged up = taller
+    const newH  = Math.max(120, Math.min(window.innerHeight * 0.8, _dragStartH + delta));
+    flap.style.setProperty('--flap-height', newH + 'px');
   });
 
-  // Reconsolidate
-  document.getElementById('reconsolidate').addEventListener('click', () => {
+  resizeEl.addEventListener('pointerup', () => {
+    flap.classList.remove('resizing');   // restore transition for open/close
+  });
+
+  // ── Reconsolidate ─────────────────────────────────────────────────────────
+  const reconBtn = document.getElementById('reconsolidate');
+  if (reconBtn) reconBtn.addEventListener('click', () => {
     submitAgentFlapRequest('__reconsolidate__', new Set());
   });
 }
@@ -2904,9 +3003,9 @@ function submitAgentFlap() {
 }
 
 function submitAgentFlapRequest(instructions, agentCtxItems) {
-  // Open chat sidebar and create a dedicated session for this request
+  // Open the AI panel and ensure a session exists
   setChatSidebarOpen(true);
-  openNewChatSession('✦ Changes');  // snapshots any existing session first
+  if (chatSessions.length === 0) openNewChatSession();
 
   // Show user message in chat
   appendChatMessage('user', instructions === '__reconsolidate__' ? 'Fully Reconsolidate CSS' : instructions);
@@ -2932,12 +3031,15 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
     } else if (msg.type === 'CSS_DONE') {
       assistantEl.classList.remove('streaming');
       const newCss = msg.css || '';
-      const cost   = (msg.inputTokens || msg.outputTokens) ? calcCost(msg.inputTokens, msg.outputTokens) : null;
-      assistantEl.innerHTML = renderChatMarkdown(
-        `Changes generated.${cost !== null ? ' ' + fmtCost(cost).trim() : ''}`
-      );
+      assistantEl.innerHTML = renderChatMarkdown('Changes generated.');
+      if (msg.inputTokens || msg.outputTokens) {
+        const cost = calcCost(msg.inputTokens, msg.outputTokens);
+        const usage = document.createElement('div');
+        usage.className = 'chat-token-usage';
+        usage.textContent = `↑ ${fmtTokens(msg.inputTokens)} · ↓ ${fmtTokens(msg.outputTokens)}${fmtCost(cost)}`;
+        assistantEl.appendChild(usage);
+      }
       setAgentFlapLoading(false);
-      document.getElementById('agentFlapInput').value = '';
       // Enter diff mode in the CSS editor
       enterDiffMode(newCss, msg.originalCss || '');
     } else if (msg.type === 'CSS_ERROR') {
@@ -2967,12 +3069,10 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
 }
 
 function setAgentFlapLoading(loading) {
-  const send = document.getElementById('agentFlapSend');
-  const stop = document.getElementById('agentFlapStop');
-  const input = document.getElementById('agentFlapInput');
-  send.classList.toggle('hidden', loading);
-  stop.classList.toggle('hidden', !loading);
-  input.disabled = loading;
+  const sendBtn = document.getElementById('chatSend');
+  const input   = document.getElementById('chatInput');
+  if (sendBtn) sendBtn.disabled = loading;
+  if (input)   input.disabled   = loading;
 }
 
 // ─── Diff Mode ────────────────────────────────────────────────────────────────
@@ -2982,53 +3082,76 @@ let diffHunks = []; // [{ id, oldMark, newMark, widget, chatNode, status: 'pendi
 function enterDiffMode(newCss, originalCss) {
   if (!cssIdeEditor) return;
 
-  // Load original CSS first if not already loaded
   const currentCss = originalCss || cssIdeEditor.getValue();
   exitDiffMode();
 
-  const oldLines = currentCss.split('\n');
-  const newLines = newCss.split('\n');
-  const diff     = computeLineDiff(currentCss.trim(), newCss.trim());
+  const diff = computeLineDiff(currentCss.trim(), newCss.trim());
+  if (!diff.some(d => d.type !== 'same')) return; // nothing changed
 
-  // Build the new document (old lines with markers, new lines hidden)
-  // Strategy: replace editor content with new CSS, then mark hunks
-  cssIdeEditor.setValue(newCss);
+  // Build a merged document: unchanged lines stay in place; removed lines (red)
+  // and added lines (green) are both present so the user can see old vs new.
+  // computeLineDiff already emits removes before adds within each hunk region.
+  cssIdeEditor.setValue(diff.map(d => d.line).join('\n'));
   cssIdeEditor.clearHistory();
 
-  // Find changed hunks (groups of adjacent add/remove)
-  const hunks = groupDiffHunks(computeLineDiff(currentCss, newCss));
-
-  // Map each hunk into the new document
+  // Walk the diff, grouping consecutive non-same entries into hunks
   diffHunks = [];
   let hunkId = 0;
+  let lineNo  = 0;
+  let i       = 0;
 
-  hunks.forEach(hunk => {
-    const id = 'hunk-' + (hunkId++);
-    // The hunk's line range in the *new* document
-    const startLine = hunk.newStart;
-    const endLine   = hunk.newEnd;
+  while (i < diff.length) {
+    if (diff[i].type === 'same') {
+      lineNo++;
+      i++;
+    } else {
+      const id          = 'hunk-' + (hunkId++);
+      const removeLines = []; // merged-doc line numbers for old/removed lines
+      const addLines    = []; // merged-doc line numbers for new/added lines
+      const hunkStart   = lineNo;
 
-    // Highlight lines
-    for (let ln = startLine; ln <= endLine; ln++) {
-      cssIdeEditor.addLineClass(ln, 'background', 'cm-diff-add-bg');
+      while (i < diff.length && diff[i].type !== 'same') {
+        if (diff[i].type === 'remove') {
+          cssIdeEditor.addLineClass(lineNo, 'background', 'cm-diff-remove-bg');
+          removeLines.push(lineNo);
+        } else {
+          cssIdeEditor.addLineClass(lineNo, 'background', 'cm-diff-add-bg');
+          addLines.push(lineNo);
+        }
+        lineNo++;
+        i++;
+      }
+
+      const hunkEnd  = lineNo - 1;
+      const hunkData = {
+        removed:  removeLines.map(ln => cssIdeEditor.getLine(ln)),
+        added:    addLines.map(ln => cssIdeEditor.getLine(ln)),
+        newStart: hunkStart,
+        newEnd:   hunkEnd,
+      };
+
+      const widgetEl   = buildHunkWidget(id, hunkData);
+      const lineWidget = cssIdeEditor.addLineWidget(hunkEnd, widgetEl, {
+        above: false, handleMouseEvents: true, noHScroll: true,
+      });
+
+      const chatNode = buildChatDiffNode(id, hunkData);
+      document.getElementById('chatMessages').appendChild(chatNode);
+      chatNode.scrollIntoView({ block: 'end' });
+
+      diffHunks.push({
+        id, hunk: hunkData, lineWidget, widgetEl, chatNode,
+        status: 'pending',
+        startLine:   hunkStart,
+        endLine:     hunkEnd,
+        removeLines,
+        addLines,
+      });
     }
+  }
 
-    // Build approve/reject widget below the hunk
-    const widgetEl = buildHunkWidget(id, hunk);
-    const lineWidget = cssIdeEditor.addLineWidget(endLine, widgetEl, {
-      above: false, handleMouseEvents: true, noHScroll: true,
-    });
+  if (diffHunks.length === 0) return;
 
-    diffHunks.push({ id, hunk, lineWidget, widgetEl, chatNode: null, status: 'pending', startLine, endLine });
-
-    // Build matching chat node
-    const chatNode = buildChatDiffNode(id, hunk);
-    document.getElementById('chatMessages').appendChild(chatNode);
-    diffHunks[diffHunks.length - 1].chatNode = chatNode;
-    chatNode.scrollIntoView({ block: 'end' });
-  });
-
-  // Show diff mode UI
   document.getElementById('cssIdeFooter').classList.add('hidden');
   document.getElementById('diffModeBar').classList.remove('hidden');
   document.getElementById('diffModeIndicator').classList.remove('hidden');
@@ -3037,11 +3160,12 @@ function enterDiffMode(newCss, originalCss) {
 }
 
 function exitDiffMode() {
-  // Clear all line decorations and widgets
   diffHunks.forEach(h => {
     try { h.lineWidget.clear(); } catch (_) {}
+    if (h.chatNode && h.chatNode.parentNode) h.chatNode.remove();
     for (let ln = h.startLine; ln <= h.endLine; ln++) {
       try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-add-bg'); } catch (_) {}
+      try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-remove-bg'); } catch (_) {}
     }
   });
   diffHunks = [];
@@ -3132,23 +3256,45 @@ function resolveHunk(id, resolution) {
 
   hunk.status = resolution;
 
-  if (resolution === 'rejected') {
-    // Replace added lines with removed lines
-    const from = { line: hunk.startLine, ch: 0 };
-    const to   = { line: hunk.endLine, ch: cssIdeEditor.getLine(hunk.endLine)?.length || 0 };
-    const replacement = hunk.hunk.removed.join('\n');
-    cssIdeEditor.replaceRange(replacement, from, to);
-    // Recalculate subsequent hunk positions (line delta)
-    const delta = hunk.hunk.removed.length - (hunk.endLine - hunk.startLine + 1);
-    for (let i = hunkIdx + 1; i < diffHunks.length; i++) {
-      diffHunks[i].startLine += delta;
-      diffHunks[i].endLine   += delta;
-    }
-  }
+  // Accept → delete the red (removed) lines, keep the green (added) lines.
+  // Reject → delete the green (added) lines, keep the red (removed) lines.
+  const linesToDelete = resolution === 'approved' ? hunk.removeLines : hunk.addLines;
+  const linesToKeep   = resolution === 'approved' ? hunk.addLines   : hunk.removeLines;
 
-  // Remove highlight lines
-  for (let ln = hunk.startLine; ln <= hunk.endLine; ln++) {
+  // Clear highlight from lines we're keeping
+  linesToKeep.forEach(ln => {
     try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-add-bg'); } catch (_) {}
+    try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-remove-bg'); } catch (_) {}
+  });
+
+  // Delete unwanted lines bottom-to-top so earlier positions stay valid
+  if (linesToDelete.length > 0) {
+    const sorted = [...linesToDelete].sort((a, b) => b - a);
+    for (const ln of sorted) {
+      const lineCount = cssIdeEditor.lineCount();
+      if (ln >= lineCount) continue;
+      if (ln < lineCount - 1) {
+        // Non-last line: remove "content\n" by spanning into the next line's start
+        cssIdeEditor.replaceRange('', { line: ln, ch: 0 }, { line: ln + 1, ch: 0 });
+      } else if (ln > 0) {
+        // Last line: remove "\ncontent" by spanning back from end of previous line
+        const prevLen = (cssIdeEditor.getLine(ln - 1) || '').length;
+        cssIdeEditor.replaceRange('',
+          { line: ln - 1, ch: prevLen },
+          { line: ln, ch: (cssIdeEditor.getLine(ln) || '').length }
+        );
+      }
+      // ln === 0 and only line: leave an empty line rather than breaking the editor
+    }
+
+    // Shift all subsequent pending hunks' line numbers down by the deleted count
+    const delta = -linesToDelete.length;
+    for (let i = hunkIdx + 1; i < diffHunks.length; i++) {
+      diffHunks[i].startLine   += delta;
+      diffHunks[i].endLine     += delta;
+      diffHunks[i].removeLines  = diffHunks[i].removeLines.map(l => l + delta);
+      diffHunks[i].addLines     = diffHunks[i].addLines.map(l => l + delta);
+    }
   }
 
   // Remove hunk widget
@@ -3163,11 +3309,9 @@ function resolveHunk(id, resolution) {
 
   updateDiffModeBar();
 
-  // If all hunks resolved, exit diff mode after short delay
   if (diffHunks.every(h => h.status !== 'pending')) {
     setTimeout(() => exitDiffMode(), 600);
   } else {
-    // Auto-scroll to next pending hunk
     scrollToNextPendingHunk(hunkIdx);
   }
 }

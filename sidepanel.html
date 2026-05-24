@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sync Styler</title>
+  <title>WP Styler</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="libs/codemirror/codemirror.min.css">
@@ -27,10 +27,7 @@
       </button>
       <div class="main-bar-right">
         <button class="main-bar-docs-btn" id="openDocs">Docs</button>
-        <button class="chat-toggle-btn" id="toggleChat">
-          <span class="chat-toggle-star">✦</span>
-          Chat
-        </button>
+        <button class="main-bar-docs-btn" id="openHistory">History</button>
       </div>
     </div>
 
@@ -74,18 +71,68 @@
       <div class="css-ide-editor-wrap" id="cssIdeEditorWrap">
         <textarea id="cssIdeTextarea" class="visually-hidden"></textarea>
       </div>
+      <!-- ─── Agent Flap (above publish bar) ─── -->
+      <div class="agent-flap" id="agentFlap">
+        <!-- Drag handle — grab and pull up to resize -->
+        <div class="agent-flap-resize" id="agentFlapResize"></div>
+        <!-- Header bar: expand/collapse left, Make Changes toggle right -->
+        <div class="agent-flap-bar">
+          <button class="agent-flap-handle" id="agentFlapHandle">
+            <svg class="agent-flap-chevron" id="agentFlapChevron" viewBox="0 0 10 6" fill="none">
+              <path d="M1 5l4-4 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="agent-flap-title">✦ AI Assistant</span>
+          </button>
+          <label class="make-changes-toggle-label" id="makeChangesToggleLabel">
+            <input type="checkbox" id="makeChangesCheck" class="visually-hidden">
+            <span class="mc-track"><span class="mc-thumb"></span></span>
+            <span class="mc-text">Make Changes</span>
+          </label>
+        </div>
+        <!-- Expandable chat body -->
+        <div class="agent-flap-body" id="agentFlapBody">
+          <div class="chat-messages" id="chatMessages"></div>
+          <div class="chat-input-area">
+            <div class="ctx-bubbles hidden" id="ctxBubbles"></div>
+            <div class="chat-input-row">
+              <div class="ctx-add-wrap">
+                <button class="ctx-add-btn" id="ctxAddBtn" title="Add context">
+                  <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </button>
+                <div class="ctx-dropdown hidden" id="ctxDropdown">
+                  <button class="ctx-opt" data-ctx="dom">DOM Snapshot</button>
+                  <button class="ctx-opt" data-ctx="css">Existing CSS</button>
+                  <button class="ctx-opt" data-ctx="screenshot">Take Screenshot</button>
+                </div>
+              </div>
+              <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask anything about the page…"></textarea>
+              <button class="chat-send" id="chatSend">
+                <svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="chat-input-footer">
+              <button class="btn-reconsolidate" id="reconsolidate">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  <path d="M11 6h2.5v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Reconsolidate
+              </button>
+              <span class="chat-token-count" id="chatTokenCount"></span>
+            </div>
+          </div>
+        </div>
+      </div>
       <!-- Normal footer -->
       <div class="css-ide-footer" id="cssIdeFooter">
+        <button class="icon-btn" id="cssIdeReloadPage" title="Refresh Page">
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <path d="M11 6h2.5v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <span class="css-ide-status" id="cssIdeStatus"></span>
-        <div class="css-ide-actions">
-          <button class="icon-btn" id="cssIdeReloadPage" title="Refresh Page">
-            <svg viewBox="0 0 16 16" fill="none">
-              <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-              <path d="M11 6h2.5v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <button class="btn-primary btn-sm" id="cssIdePublish">Publish</button>
-        </div>
+        <button class="btn-primary btn-sm" id="cssIdePublish">Publish</button>
       </div>
       <!-- Diff mode bar (replaces footer while reviewing) -->
       <div class="diff-mode-bar hidden" id="diffModeBar">
@@ -94,49 +141,6 @@
         <div class="diff-mode-actions">
           <button class="btn-secondary btn-sm" id="diffRejectAll">Reject All</button>
           <button class="btn-primary btn-sm" id="diffAcceptAll">Accept All</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ─── Agent Flap ─── -->
-    <div class="agent-flap" id="agentFlap">
-      <button class="agent-flap-handle" id="agentFlapHandle">
-        <svg class="agent-flap-chevron" id="agentFlapChevron" viewBox="0 0 10 6" fill="none">
-          <path d="M1 5l4-4 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="agent-flap-title">✦ Make Changes</span>
-      </button>
-      <div class="agent-flap-body" id="agentFlapBody">
-        <div class="agent-ctx-bubbles hidden" id="agentCtxBubbles"></div>
-        <div class="agent-flap-input-row">
-          <div class="ctx-add-wrap">
-            <button class="ctx-add-btn" id="agentCtxAddBtn" title="Add context">
-              <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            </button>
-            <div class="ctx-dropdown hidden" id="agentCtxDropdown">
-              <button class="ctx-opt" data-ctx="dom">DOM Snapshot</button>
-              <button class="ctx-opt" data-ctx="css">Existing CSS</button>
-              <button class="ctx-opt" data-ctx="screenshot">Take Screenshot</button>
-            </div>
-          </div>
-          <textarea class="agent-flap-input" id="agentFlapInput" rows="1" placeholder="Describe what you want to change…"></textarea>
-          <button class="agent-flap-send" id="agentFlapSend" title="Send">
-            <svg viewBox="0 0 16 16" fill="none">
-              <path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <button class="agent-flap-stop hidden" id="agentFlapStop" title="Stop">
-            <svg viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor"/></svg>
-          </button>
-        </div>
-        <div class="agent-flap-footer">
-          <button class="btn-reconsolidate" id="reconsolidate">
-            <svg viewBox="0 0 16 16" fill="none">
-              <path d="M8 13.5A5.5 5.5 0 1 1 13.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-              <path d="M11 6h2.5v2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            Fully Reconsolidate
-          </button>
         </div>
       </div>
     </div>
@@ -209,54 +213,6 @@
   </div><!-- /main-layout -->
 
 
-  <!-- ═══════════════════════════════════════════════════════
-       CHAT SIDEBAR (280px, slides in from right)
-  ═══════════════════════════════════════════════════════ -->
-  <div class="chat-sidebar" id="chatSidebar">
-
-    <!-- Tab bar -->
-    <div class="chat-sidebar-header">
-      <div class="chat-tabs" id="chatTabs">
-        <!-- tabs populated dynamically -->
-      </div>
-      <button class="chat-new-tab-btn" id="chatNewTabBtn" title="New chat">
-        <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      </button>
-    </div>
-
-    <!-- Messages -->
-    <div class="chat-messages" id="chatMessages"></div>
-
-    <!-- Input area -->
-    <div class="chat-input-area">
-      <div class="ctx-bubbles hidden" id="ctxBubbles"></div>
-      <div class="chat-input-row">
-        <div class="ctx-add-wrap">
-          <button class="ctx-add-btn" id="ctxAddBtn" title="Add context">
-            <svg viewBox="0 0 10 10" fill="none"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-          <div class="ctx-dropdown hidden" id="ctxDropdown">
-            <button class="ctx-opt" data-ctx="dom">DOM Snapshot</button>
-            <button class="ctx-opt" data-ctx="css">Existing CSS</button>
-            <button class="ctx-opt" data-ctx="screenshot">Take Screenshot</button>
-          </div>
-        </div>
-        <textarea class="chat-input" id="chatInput" rows="1" placeholder="Ask anything about the page…"></textarea>
-        <button class="chat-send" id="chatSend">
-          <svg viewBox="0 0 16 16" fill="none"><path d="M2 8h12M9 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>
-      <div class="chat-input-footer">
-        <label class="make-changes-toggle-label" id="makeChangesToggleLabel">
-          <input type="checkbox" id="makeChangesCheck" class="visually-hidden">
-          <span class="mc-track"><span class="mc-thumb"></span></span>
-          <span class="mc-text">Make Changes</span>
-        </label>
-        <span class="chat-token-count" id="chatTokenCount"></span>
-      </div>
-    </div>
-
-  </div><!-- /chat-sidebar -->
 
 
   <!-- ═══════════════════════════════════════════════════════

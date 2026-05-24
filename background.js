@@ -1,8 +1,8 @@
-// Sync Styler — Background Service Worker
+// WP Styler — Background Service Worker
 
 const SYSTEM_PROMPTS = {
   openai: {
-    full: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+    full: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
 
 Return the COMPLETE rewritten CSS file with your changes applied — additions, edits, and deletions included.
@@ -17,7 +17,7 @@ Rules:
 - Do not output anything outside the <css></css> tags.
 - No explanations, no markdown, no code fences.`,
 
-    patch: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+    patch: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
 
 Return ONLY the CSS rules that need to be added or changed — not the entire file.
@@ -34,7 +34,7 @@ Rules:
   },
 
   claude: {
-    full: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+    full: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
 
 Return the COMPLETE rewritten CSS file with your changes applied — additions, edits, and deletions included.
@@ -49,7 +49,7 @@ Rules:
 - Do not output anything outside the <css></css> tags.
 - No explanations, no markdown, no code fences.`,
 
-    patch: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+    patch: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
 
 Return ONLY the CSS rules that need to be added or changed — not the entire file.
@@ -85,7 +85,7 @@ No explanations. No markdown. Nothing outside the <css></css> tags.`,
   },
 
   deepseek: {
-    full: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+    full: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS and a DOM structure summary.
 
 Return the COMPLETE rewritten CSS file with your changes applied — additions, edits, and deletions included.
@@ -100,7 +100,7 @@ Rules:
 - Do not output anything outside the <css></css> tags.
 - No explanations, no markdown, no code fences.`,
 
-    patch: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+    patch: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS and a DOM structure summary.
 
 Return ONLY the CSS rules that need to be added or changed — not the entire file.
@@ -134,7 +134,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handleMessage(msg).then(sendResponse).catch(err => {
-    console.error('[SyncStyler]', err);
+    console.error('[WPStyler]', err);
     sendResponse({ error: err.message });
   });
   return true;
@@ -455,9 +455,13 @@ function buildUserContent({ currentCss, domSnapshot, screenshotDataUrl, screensh
     }
   }
 
+  const { cssMode: mode } = settings;
   let text = `Current Additional CSS:\n${currentCss || '(empty)'}\n\n`;
   if (domSnapshot) text += `DOM structure:\n${JSON.stringify(domSnapshot)}\n\n`;
   text += `Instructions: ${instructions}`;
+  if (mode === 'patch') {
+    text += '\n\nIMPORTANT: Return ONLY the CSS rules that need to be added or changed. Do NOT return the entire stylesheet — only the new or modified rules, wrapped in <css> tags.';
+  }
   userContent.push({ type: 'text', text });
 
   return { userContent };
@@ -1274,49 +1278,65 @@ function mergeCssPatch(existingCss, patchCss) {
   if (!patchCss || !patchCss.trim()) return existingCss;
   if (!existingCss || !existingCss.trim()) return patchCss;
 
-  function splitBlocks(css) {
+  // Parse CSS into blocks, tracking the exact start/end character positions
+  // inside the source string so we can do surgical in-place replacement.
+  function parseBlocks(css) {
     const blocks = [];
-    let depth = 0, start = 0;
+    let depth = 0;
+    let contentStart = -1; // position of first non-whitespace char in current block
+
     for (let i = 0; i < css.length; i++) {
-      if (css[i] === '{') depth++;
-      else if (css[i] === '}') {
+      if (depth === 0 && contentStart === -1 && /\S/.test(css[i])) {
+        contentStart = i;
+      }
+      if (css[i] === '{') {
+        depth++;
+      } else if (css[i] === '}') {
         depth--;
-        if (depth === 0) {
-          blocks.push(css.slice(start, i + 1).trim());
-          start = i + 1;
+        if (depth === 0 && contentStart !== -1) {
+          const text = css.slice(contentStart, i + 1);
+          const braceIdx = text.indexOf('{');
+          const selector = braceIdx === -1 ? null : text.slice(0, braceIdx).trim().replace(/\s+/g, ' ');
+          if (selector) {
+            blocks.push({ selector, text, start: contentStart, end: i + 1 });
+          }
+          contentStart = -1;
         }
       }
     }
-    const tail = css.slice(start).trim();
-    if (tail) blocks.push(tail);
-    return blocks.filter(Boolean);
+    return blocks;
   }
 
-  function selectorOf(block) {
-    const i = block.indexOf('{');
-    return i === -1 ? null : block.slice(0, i).trim();
-  }
-
-  const existingBlocks = splitBlocks(existingCss);
-  const patchBlocks = splitBlocks(patchCss);
+  // Build selector → block-text map from the patch
+  const patchBlocks = parseBlocks(patchCss);
   const patchMap = new Map();
-  for (const block of patchBlocks) {
-    const sel = selectorOf(block);
-    if (sel) patchMap.set(sel, block);
+  for (const { selector, text } of patchBlocks) {
+    patchMap.set(selector, text);
   }
 
-  const merged = existingBlocks.map(block => {
-    const sel = selectorOf(block);
-    if (sel && patchMap.has(sel)) {
-      const replacement = patchMap.get(sel);
-      patchMap.delete(sel);
-      return replacement;
+  // Collect in-place replacements for blocks that exist in both
+  const existingBlocks = parseBlocks(existingCss);
+  const replacements = [];
+  for (const { selector, start, end } of existingBlocks) {
+    if (patchMap.has(selector)) {
+      replacements.push({ start, end, newText: patchMap.get(selector) });
+      patchMap.delete(selector);
     }
-    return block;
-  });
+  }
 
-  for (const block of patchMap.values()) merged.push(block);
-  return merged.join('\n\n');
+  // Apply replacements from end → start to keep earlier offsets valid
+  replacements.sort((a, b) => b.start - a.start);
+  let result = existingCss;
+  for (const { start, end, newText } of replacements) {
+    result = result.slice(0, start) + newText + result.slice(end);
+  }
+
+  // Append genuinely new rules that had no matching selector in the original
+  if (patchMap.size > 0) {
+    result = result.trimEnd() + '\n\n' + [...patchMap.values()].join('\n\n') + '\n';
+  }
+
+  return result;
 }
 
 // ─── Line Diff ────────────────────────────────────────────────────────────────
