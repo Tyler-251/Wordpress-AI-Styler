@@ -4,15 +4,23 @@
 const CLAUDE_MODELS = [
   { id: 'claude-haiku-4-5',  label: 'Haiku 4.5',  inputPer1M: 1.00, outputPer1M: 5.00  },
   { id: 'claude-sonnet-4-5', label: 'Sonnet 4.5', inputPer1M: 3.00, outputPer1M: 15.00 },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', inputPer1M: 3.00, outputPer1M: 15.00 },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', inputPer1M: 3.00, outputPer1M: 15.00, recommended: true },
   { id: 'claude-opus-4-5',   label: 'Opus 4.5',   inputPer1M: 5.00, outputPer1M: 25.00 },
   { id: 'claude-opus-4-6',   label: 'Opus 4.6',   inputPer1M: 5.00, outputPer1M: 25.00 },
   { id: 'claude-opus-4-7',   label: 'Opus 4.7',   inputPer1M: 5.00, outputPer1M: 25.00 },
 ];
 
 const DEEPSEEK_MODELS = [
-  { id: 'deepseek-v4-flash', label: 'V4 Flash', inputPer1M: 0.14,  outputPer1M: 0.28 },
+  { id: 'deepseek-v4-flash', label: 'V4 Flash', inputPer1M: 0.14,  outputPer1M: 0.28, recommended: true },
   { id: 'deepseek-v4-pro',   label: 'V4 Pro',   inputPer1M: 0.435, outputPer1M: 0.87 },
+];
+
+const OPENAI_MODELS = [
+  { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano', inputPer1M: 0.10, outputPer1M: 0.40 },
+  { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', inputPer1M: 0.40, outputPer1M: 1.60, recommended: true },
+  { id: 'gpt-4.1',      label: 'GPT-4.1',      inputPer1M: 2.00, outputPer1M: 8.00 },
+  { id: 'gpt-4o-mini',  label: 'GPT-4o Mini',  inputPer1M: 0.15, outputPer1M: 0.60 },
+  { id: 'gpt-4o',       label: 'GPT-4o',        inputPer1M: 2.50, outputPer1M: 10.00 },
 ];
 
 
@@ -657,6 +665,8 @@ async function doSaveSettings() {
     claudeModel:      document.getElementById('claudeModel').value || 'claude-sonnet-4-6',
     deepseekApiKey:   document.getElementById('deepseekApiKey').value.trim(),
     deepseekModel:    document.getElementById('deepseekModel').value || 'deepseek-v4-flash',
+    openaiApiKey:     document.getElementById('openaiApiKey').value.trim(),
+    openaiModel:      document.getElementById('openaiModel').value || 'gpt-4.1-mini',
     ollamaUrl:        document.getElementById('ollamaUrl').value.trim() || 'http://localhost:11434',
     ollamaModel:      document.getElementById('ollamaModel').value.trim() || 'llama3',
     ollamaVisionModel: document.getElementById('ollamaVisionModel').value.trim() || 'llava',
@@ -854,6 +864,10 @@ function applySettingsToForm(s) {
   const dsModelSelect = document.getElementById('deepseekModel');
   dsModelSelect.value = s.deepseekModel || 'deepseek-v4-flash';
   if (!dsModelSelect.value) dsModelSelect.value = 'deepseek-v4-flash';
+  document.getElementById('openaiApiKey').value      = s.openaiApiKey || '';
+  const oaiModelSelect = document.getElementById('openaiModel');
+  oaiModelSelect.value = s.openaiModel || 'gpt-4.1-mini';
+  if (!oaiModelSelect.value) oaiModelSelect.value = 'gpt-4.1-mini';
   document.getElementById('ollamaUrl').value         = s.ollamaUrl || 'http://localhost:11434';
   document.getElementById('ollamaModel').value       = s.ollamaModel || 'llama3';
   document.getElementById('ollamaVisionModel').value = s.ollamaVisionModel || 'llava';
@@ -883,6 +897,7 @@ function setBackend(value) {
   });
   document.getElementById('claudeConfig').classList.toggle('hidden', value !== 'claude');
   document.getElementById('deepseekConfig').classList.toggle('hidden', value !== 'deepseek');
+  document.getElementById('openaiConfig').classList.toggle('hidden', value !== 'openai');
   document.getElementById('ollamaConfig').classList.toggle('hidden', value !== 'ollama');
 }
 
@@ -977,6 +992,55 @@ function setupSetupTab() {
     btn.disabled = true;
     try {
       const resp = await fetch('https://api.deepseek.com/models', {
+        headers: { 'Authorization': `Bearer ${key}` },
+      });
+      if (resp.ok) {
+        setStatusDot(dot, 'ok');
+        setVerifyMsg(msgEl, 'API key is valid', 'ok');
+      } else {
+        const body = await resp.json().catch(() => ({}));
+        setStatusDot(dot, 'fail');
+        setVerifyMsg(msgEl, body?.error?.message || `Error ${resp.status}`, 'fail');
+      }
+    } catch (e) {
+      setStatusDot(dot, 'fail');
+      setVerifyMsg(msgEl, e.message, 'fail');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ── OpenAI: show/hide key ──
+  document.getElementById('openaiKeyView').addEventListener('click', () => {
+    const input = document.getElementById('openaiApiKey');
+    const btn   = document.getElementById('openaiKeyView');
+    const show  = input.type === 'password';
+    input.type  = show ? 'text' : 'password';
+    btn.classList.toggle('active', show);
+  });
+
+  // ── OpenAI: copy key ──
+  document.getElementById('openaiKeyCopy').addEventListener('click', () => {
+    const key = document.getElementById('openaiApiKey').value;
+    if (!key) return;
+    navigator.clipboard.writeText(key).catch(() => {});
+    const btn = document.getElementById('openaiKeyCopy');
+    btn.classList.add('active');
+    setTimeout(() => btn.classList.remove('active'), 1200);
+  });
+
+  // ── OpenAI: verify API key ──
+  document.getElementById('verifyOpenaiKey').addEventListener('click', async () => {
+    const key   = document.getElementById('openaiApiKey').value.trim();
+    const dot   = document.getElementById('openaiStatusDot');
+    const msgEl = document.getElementById('openaiVerifyMsg');
+    const btn   = document.getElementById('verifyOpenaiKey');
+    if (!key) { setStatusDot(dot, 'fail'); setVerifyMsg(msgEl, 'Enter an API key first', 'fail'); return; }
+    setStatusDot(dot, 'pending');
+    msgEl.classList.add('hidden');
+    btn.disabled = true;
+    try {
+      const resp = await fetch('https://api.openai.com/v1/models', {
         headers: { 'Authorization': `Bearer ${key}` },
       });
       if (resp.ok) {
@@ -1536,6 +1600,12 @@ function calcCost(inputTokens, outputTokens) {
   if (backend === 'deepseek') {
     const modelId = document.getElementById('deepseekModel')?.value;
     const model = DEEPSEEK_MODELS.find(m => m.id === modelId);
+    if (!model) return null;
+    return (inputTokens * model.inputPer1M + outputTokens * model.outputPer1M) / 1_000_000;
+  }
+  if (backend === 'openai') {
+    const modelId = document.getElementById('openaiModel')?.value;
+    const model = OPENAI_MODELS.find(m => m.id === modelId);
     if (!model) return null;
     return (inputTokens * model.inputPer1M + outputTokens * model.outputPer1M) / 1_000_000;
   }
@@ -2111,9 +2181,10 @@ async function deleteDoc(id) {
 const SB_PROVIDER_ICONS = {
   claude:   'icons/models/claude.png',
   deepseek: 'icons/models/deepseek.png',
+  openai:   'icons/models/openai.png',
   ollama:   'icons/models/ollama.png',
 };
-const SB_PROVIDER_LABELS = { claude: 'Claude', deepseek: 'DeepSeek', ollama: 'Ollama' };
+const SB_PROVIDER_LABELS = { claude: 'Claude', deepseek: 'DeepSeek', openai: 'OpenAI', ollama: 'Ollama' };
 
 function setupStatusBar() {
   // Provider
@@ -2137,7 +2208,9 @@ function setupStatusBar() {
     const item = e.target.closest('.sb-popover-item');
     if (!item) return;
     const backend = document.querySelector('#backendToggle .toggle-opt.active')?.dataset.value || 'claude';
-    const key = backend === 'deepseek' ? 'deepseekModel' : 'claudeModel';
+    const key = backend === 'deepseek' ? 'deepseekModel'
+      : backend === 'openai' ? 'openaiModel'
+      : 'claudeModel';
     closeSbPopovers();
     await saveStatusBarSetting(key, item.dataset.value);
   });
@@ -2190,16 +2263,20 @@ function updateStatusBar(settings) {
     modelWrap.classList.add('hidden');
   } else {
     modelWrap.classList.remove('hidden');
-    const models = backend === 'deepseek' ? DEEPSEEK_MODELS : CLAUDE_MODELS;
-    const currentId = backend === 'deepseek'
-      ? (settings.deepseekModel || 'deepseek-v4-flash')
-      : (settings.claudeModel   || 'claude-sonnet-4-6');
+    const models = backend === 'deepseek' ? DEEPSEEK_MODELS
+      : backend === 'openai' ? OPENAI_MODELS
+      : CLAUDE_MODELS;
+    const currentId = backend === 'deepseek' ? (settings.deepseekModel || 'deepseek-v4-flash')
+      : backend === 'openai' ? (settings.openaiModel || 'gpt-4.1-mini')
+      : (settings.claudeModel || 'claude-sonnet-4-6');
     const active = models.find(m => m.id === currentId) || models[0];
-    document.getElementById('sbModelLabel').textContent = active ? active.label : currentId;
+    document.getElementById('sbModelLabel').textContent = active
+      ? active.label + (active.recommended ? ' ★' : '')
+      : currentId;
 
     document.getElementById('sbModelPopover').innerHTML = models.map(m => `
       <button class="sb-popover-item${m.id === currentId ? ' selected' : ''}" data-value="${m.id}">
-        <span>${escapeHtml(m.label)}</span>
+        <span>${escapeHtml(m.label)}${m.recommended ? ' <span class="sb-recommended">(recommended)</span>' : ''}</span>
         <svg class="sb-check${m.id === currentId ? '' : ' hidden'}" viewBox="0 0 12 12" fill="none">
           <path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>

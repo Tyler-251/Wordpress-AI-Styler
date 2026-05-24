@@ -1,6 +1,38 @@
 // Sync Styler — Background Service Worker
 
 const SYSTEM_PROMPTS = {
+  openai: {
+    full: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
+
+Return the COMPLETE rewritten CSS file with your changes applied — additions, edits, and deletions included.
+Wrap your response in <css> tags:
+<css>
+/* complete rewritten CSS here */
+</css>
+
+Rules:
+- Include every rule from the original file unless it should be removed.
+- Make the requested changes precisely — add, edit, or delete as needed.
+- Do not output anything outside the <css></css> tags.
+- No explanations, no markdown, no code fences.`,
+
+    patch: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
+You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
+
+Return ONLY the CSS rules that need to be added or changed — not the entire file.
+Wrap your response in <css> tags:
+<css>
+/* only the new or modified rules */
+</css>
+
+Rules:
+- Include a rule in full if any part of it changes.
+- Do not include rules that are unchanged.
+- Do not output anything outside the <css></css> tags.
+- No explanations, no markdown, no code fences.`,
+  },
+
   claude: {
     full: `You are a CSS expert helping style a WordPress marketing site for a product called Sync (a web-based meeting tool).
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
@@ -234,7 +266,10 @@ async function generateCssStreaming(msg, port, signal) {
 
   const isReconsolidate = instructions === '__reconsolidate__';
   const isRevision      = history && history.length > 0;
-  const backend  = settings.aiBackend === 'ollama' ? 'ollama' : settings.aiBackend === 'deepseek' ? 'deepseek' : 'claude';
+  const backend  = settings.aiBackend === 'ollama' ? 'ollama'
+    : settings.aiBackend === 'deepseek' ? 'deepseek'
+    : settings.aiBackend === 'openai'   ? 'openai'
+    : 'claude';
   const cssMode  = isReconsolidate ? 'full' : (settings.cssMode || 'full');
   const systemPrompt = SYSTEM_PROMPTS[backend][cssMode];
 
@@ -319,7 +354,9 @@ async function generateCssStreaming(msg, port, signal) {
     ? await streamOllama(settings, messages, port, { systemPrompt, signal })
     : backend === 'deepseek'
       ? await streamDeepSeek(settings, messages, port, { systemPrompt, signal })
-      : await streamClaude(settings, messages, port, { systemPrompt, signal });
+      : backend === 'openai'
+        ? await streamOpenAI(settings, messages, port, { systemPrompt, signal })
+        : await streamClaude(settings, messages, port, { systemPrompt, signal });
   let fullText = result.text;
   let inputTokens = result.inputTokens, outputTokens = result.outputTokens;
 
@@ -335,7 +372,9 @@ async function generateCssStreaming(msg, port, signal) {
       ? await streamOllama(settings, retryMessages, port, { systemPrompt, signal })
       : backend === 'deepseek'
         ? await streamDeepSeek(settings, retryMessages, port, { systemPrompt, signal })
-        : await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
+        : backend === 'openai'
+          ? await streamOpenAI(settings, retryMessages, port, { systemPrompt, signal })
+          : await streamClaude(settings, retryMessages, port, { systemPrompt, signal });
     fullText = retryResult.text;
     inputTokens  += retryResult.inputTokens;
     outputTokens += retryResult.outputTokens;
@@ -516,7 +555,9 @@ async function streamChatMessage(msg, port) {
     ? await streamOllama(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' })
     : settings.aiBackend === 'deepseek'
       ? await streamDeepSeek(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' })
-      : await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
+      : settings.aiBackend === 'openai'
+        ? await streamOpenAI(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' })
+        : await streamClaude(settings, messages, port, { systemPrompt: SYSTEM_PROMPT_CHAT, chunkType: 'CHAT_CHUNK' });
 
   const updatedHistory = [...messages, { role: 'assistant', content: chatResult.text }];
   port.postMessage({
@@ -533,7 +574,9 @@ async function streamSmartSearch(msg, port, signal) {
   const { css, query } = msg;
   const settings = await getSettings();
   const backend = settings.aiBackend === 'ollama' ? 'ollama'
-    : settings.aiBackend === 'deepseek' ? 'deepseek' : 'claude';
+    : settings.aiBackend === 'deepseek' ? 'deepseek'
+    : settings.aiBackend === 'openai'   ? 'openai'
+    : 'claude';
 
   const messages = [{ role: 'user', content: `CSS file:\n${css}\n\nFind: ${query}` }];
   const opts = { systemPrompt: SYSTEM_PROMPT_SMART_SEARCH, chunkType: 'SMART_CHUNK', signal };
@@ -542,7 +585,9 @@ async function streamSmartSearch(msg, port, signal) {
     ? await streamOllama(settings, messages, port, opts)
     : backend === 'deepseek'
       ? await streamDeepSeek(settings, messages, port, opts)
-      : await streamClaude(settings, messages, port, opts);
+      : backend === 'openai'
+        ? await streamOpenAI(settings, messages, port, opts)
+        : await streamClaude(settings, messages, port, opts);
 
   port.postMessage({ type: 'SMART_DONE', result: result.text.trim() });
 }
@@ -553,7 +598,9 @@ async function streamInlineRewrite(msg, port, signal) {
   const { selectedCss, instruction } = msg;
   const settings = await getSettings();
   const backend = settings.aiBackend === 'ollama' ? 'ollama'
-    : settings.aiBackend === 'deepseek' ? 'deepseek' : 'claude';
+    : settings.aiBackend === 'deepseek' ? 'deepseek'
+    : settings.aiBackend === 'openai'   ? 'openai'
+    : 'claude';
 
   const userMessage = `CSS to rewrite:\n${selectedCss}\n\nInstruction: ${instruction}`;
   const messages = [{ role: 'user', content: userMessage }];
@@ -563,7 +610,9 @@ async function streamInlineRewrite(msg, port, signal) {
     ? await streamOllama(settings, messages, port, opts)
     : backend === 'deepseek'
       ? await streamDeepSeek(settings, messages, port, opts)
-      : await streamClaude(settings, messages, port, opts);
+      : backend === 'openai'
+        ? await streamOpenAI(settings, messages, port, opts)
+        : await streamClaude(settings, messages, port, opts);
 
   port.postMessage({ type: 'INLINE_DONE', css: result.text.trim() });
 }
@@ -789,6 +838,92 @@ async function streamDeepSeek(settings, messages, port, { systemPrompt, chunkTyp
         // Final chunk carries usage when stream_options.include_usage = true
         if (event.usage) {
           inputTokens  = event.usage.prompt_tokens    || 0;
+          outputTokens = event.usage.completion_tokens || 0;
+        }
+        const delta = event.choices?.[0]?.delta;
+        if (delta?.content) {
+          fullText += delta.content;
+          port.postMessage({ type: chunkType, text: delta.content });
+        }
+        if (event.choices?.[0]?.finish_reason === 'length') {
+          port.postMessage({
+            type: chunkType === 'CSS_CHUNK' ? 'CSS_DEBUG' : 'CHAT_DEBUG',
+            text: '⚠️ Response was cut off — hit max_tokens limit. Try a shorter instruction or switch to Patch mode.',
+          });
+        }
+      } catch (_) {}
+    }
+  }
+
+  return { text: fullText, inputTokens, outputTokens };
+}
+
+// ─── OpenAI Streaming ─────────────────────────────────────────────────────────
+// OpenAI Chat Completions SSE. Supports vision via image_url blocks (GPT-4o /
+// GPT-4.1 family). Anthropic-style image blocks are converted on the fly.
+
+async function streamOpenAI(settings, messages, port, { systemPrompt, chunkType = 'CSS_CHUNK', signal } = {}) {
+  if (!settings.openaiApiKey) throw new Error('OpenAI API key not set. Go to the Config tab.');
+
+  // Convert Anthropic-style content arrays to OpenAI format
+  const openaiMessages = messages.map(m => {
+    if (!Array.isArray(m.content)) return m;
+    const content = m.content.map(block => {
+      if (block.type === 'text') return { type: 'text', text: block.text };
+      if (block.type === 'image') {
+        const { media_type, data } = block.source;
+        return { type: 'image_url', image_url: { url: `data:${media_type};base64,${data}` } };
+      }
+      return null;
+    }).filter(Boolean);
+    return { role: m.role, content };
+  });
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    signal,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.openaiApiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.openaiModel || 'gpt-4.1-mini',
+      max_tokens: 16000,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...openaiMessages,
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`OpenAI API error ${resp.status}: ${errText}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let buf = '';
+  let inputTokens = 0, outputTokens = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+      try {
+        const event = JSON.parse(data);
+        if (event.usage) {
+          inputTokens  = event.usage.prompt_tokens     || 0;
           outputTokens = event.usage.completion_tokens || 0;
         }
         const delta = event.choices?.[0]?.delta;
@@ -1343,6 +1478,8 @@ const DEFAULT_SETTINGS = {
   claudeModel: 'claude-sonnet-4-6',
   deepseekApiKey: '',
   deepseekModel: 'deepseek-v4-flash',
+  openaiApiKey: '',
+  openaiModel: 'gpt-4.1-mini',
   ollamaUrl: 'http://localhost:11434',
   ollamaModel: 'llama3',
   ollamaVisionModel: 'llava',

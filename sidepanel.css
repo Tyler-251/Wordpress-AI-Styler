@@ -2105,6 +2105,12 @@ select.select-input option {
 .sb-popover-item:hover   { background: var(--bg-surface-hover); }
 .sb-popover-item.selected { color: var(--accent); }
 
+.sb-recommended {
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.8;
+}
+
 .sb-check {
   width: 12px;
   height: 12px;
