@@ -44,8 +44,11 @@ const state = {
   lastInstructions: '',
   scopeMode: 'all',           // 'all' | '1' | '2' | '3' | '4' | '5'
   chatHistory: [],
+  chatHasCss: false,  // CSS has been injected into this conversation
+  chatHasDom: false,  // DOM has been injected into this conversation
   chatContextItems: new Set(), // active context bubbles: 'dom' | 'css' | 'screenshot' | 'designref'
   cssContextChars: null,
+  domContextChars: null,
   siteTabId: null,
   siteTabTitle: null,
 };
@@ -68,6 +71,7 @@ async function init() {
 
   await loadSettings();
   await loadDesignRef();
+  send({ type: 'COLLAPSE_CUSTOMIZER_SIDEBAR' }).catch(() => {});
   setupStatusBar();
   updateStatusBarMode();
   setupSettings();
@@ -119,6 +123,7 @@ function setupMainTabs() {
     document.getElementById('chatMessages').innerHTML = '';
     document.getElementById('chatInput').value = '';
     document.getElementById('chatInput').style.height = 'auto';
+    updateChatMediaPreviews();
     renderChatContextBubbles();
     updateTokenCounter();
   });
@@ -274,85 +279,100 @@ function setupHelper() {
 
   sendBtn.addEventListener('click', handleChatSend);
 
-  // Delegated copy button handler (inline onclick blocked by MV3 CSP)
-  document.getElementById('chatMessages').addEventListener('click', e => {
-    const btn = e.target.closest('.chat-code-copy');
-    if (!btn) return;
-    const code = btn.closest('.chat-code-wrap')?.querySelector('code')?.textContent ?? '';
-    navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = 'Copied!';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
-    }).catch(() => {});
-  });
-
-  // Context "+" dropdown
-  const addBtn   = document.getElementById('ctxAddBtn');
-  const dropdown = document.getElementById('ctxDropdown');
-
-  addBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    refreshCtxDropdownOptions();
-    dropdown.classList.toggle('hidden');
-  });
-
-  document.addEventListener('click', () => dropdown.classList.add('hidden'));
-
-  document.querySelectorAll('.ctx-opt').forEach(opt => {
-    opt.addEventListener('click', e => {
-      e.stopPropagation();
-      const ctx = opt.dataset.ctx;
-      if (ctx === 'css' && !state.chatContextItems.has('css')) {
-        // Prefetch char count
-        state.cssContextChars = null;
-        updateTokenCounter();
-        send({ type: 'GET_CSS_CHARS' }).then(r => {
-          state.cssContextChars = r.chars ?? 0;
-          updateTokenCounter();
-        }).catch(() => { state.cssContextChars = 0; });
-      }
-      state.chatContextItems.add(ctx);
-      dropdown.classList.add('hidden');
-      renderChatContextBubbles();
-      updateTokenCounter();
-    });
-  });
+  // Delegated copy / find button handler (inline onclick blocked by MV3 CSP)
+  document.getElementById('chatMessages').addEventListener('click', handleChatCodeClick);
 
   updateTokenCounter();
 }
 
-function refreshCtxDropdownOptions() {
-  document.querySelectorAll('.ctx-opt').forEach(opt => {
-    const ctx = opt.dataset.ctx;
-    const alreadyAdded = state.chatContextItems.has(ctx);
-    const unavailable =
-      (ctx === 'screenshot' && !state.screenshotDataUrl) ||
-      (ctx === 'designref'  && !state.designRefDataUrl);
-    opt.disabled = alreadyAdded || unavailable;
-    opt.style.opacity = (alreadyAdded || unavailable) ? '0.4' : '';
+const CTX_GROUPS = {
+  page:   ['css', 'dom'],
+  visual: ['screenshot', 'designref'],
+};
+
+function updateCtxDropdownState() {
+  const makeChanges = document.getElementById('makeChangesCheck')?.checked;
+
+  // Children
+  document.querySelectorAll('#ctxDropdown [data-ctx]').forEach(el => {
+    const ctx = el.dataset.ctx;
+    const on          = state.chatContextItems.has(ctx);
+    const unavailable = ctx === 'designref' && !state.designRefDataUrl;
+    const locked      = makeChanges && (ctx === 'css' || ctx === 'dom');
+    const stateEl = el.querySelector('.ctx-item-state');
+    stateEl.textContent = on ? '✓' : '';
+    stateEl.className = 'ctx-item-state' + (on ? ' ctx-state-full' : '');
+    el.classList.toggle('ctx-opt-locked',      locked);
+    el.classList.toggle('ctx-opt-unavailable', unavailable && !on);
+    el.disabled = locked;
   });
+
+  // Group headers
+  document.querySelectorAll('#ctxDropdown [data-ctx-group]').forEach(el => {
+    const group    = el.dataset.ctxGroup;
+    const members  = CTX_GROUPS[group] || [];
+    const onCount  = members.filter(c => state.chatContextItems.has(c)).length;
+    const locked   = makeChanges && group === 'page';
+    const stateEl  = el.querySelector('.ctx-item-state');
+    const isFull   = onCount === members.length && onCount > 0;
+    const isPartial = onCount > 0 && !isFull;
+    stateEl.textContent = onCount === 0 ? '' : isFull ? '✓' : '~';
+    stateEl.className = 'ctx-item-state' + (isFull ? ' ctx-state-full' : isPartial ? ' ctx-state-partial' : '');
+    el.classList.toggle('ctx-opt-locked', locked);
+    el.disabled = locked;
+  });
+}
+
+function addCtxItem(ctx) {
+  state.chatContextItems.add(ctx);
+  if (ctx === 'css' && state.cssContextChars === null) {
+    send({ type: 'GET_CSS_CHARS' }).then(r => {
+      state.cssContextChars = r.chars ?? 0; updateTokenCounter();
+    }).catch(() => { state.cssContextChars = 0; updateTokenCounter(); });
+  }
+  if (ctx === 'dom' && state.domContextChars === null) {
+    send({ type: 'GET_DOM_CHARS', siteTabId: state.siteTabId }).then(r => {
+      state.domContextChars = r.chars ?? 12000; updateTokenCounter();
+    }).catch(() => { state.domContextChars = 12000; updateTokenCounter(); });
+  }
+}
+
+function removeCtxItem(ctx) {
+  state.chatContextItems.delete(ctx);
+  if (ctx === 'css') state.cssContextChars = null;
+  if (ctx === 'dom') state.domContextChars = null;
+  if (ctx === 'screenshot') { state.screenshotDataUrl = null; state.screenshotTime = null; }
+  if (ctx === 'screenshot' || ctx === 'designref') updateChatMediaPreviews();
 }
 
 function renderChatContextBubbles() {
   const container = document.getElementById('ctxBubbles');
   container.innerHTML = '';
 
-  const labels = { dom: 'DOM', css: 'CSS', screenshot: 'Screenshot', designref: 'Design Ref' };
+  const labels = { dom: 'DOM', css: 'CSS' };
+  const makeChanges = document.getElementById('makeChangesCheck')?.checked;
 
   for (const ctx of state.chatContextItems) {
+    // screenshot and designref are shown as visual thumbnails, not bubbles
+    if (ctx === 'screenshot' || ctx === 'designref') continue;
+    const autoLocked = makeChanges && (ctx === 'css' || ctx === 'dom');
     const bubble = document.createElement('span');
-    bubble.className = 'ctx-bubble';
-    bubble.innerHTML = `${labels[ctx] || ctx}<button class="ctx-bubble-remove" title="Remove">×</button>`;
-    bubble.querySelector('.ctx-bubble-remove').addEventListener('click', () => {
-      state.chatContextItems.delete(ctx);
-      if (ctx === 'css') state.cssContextChars = null;
-      renderChatContextBubbles();
-      updateTokenCounter();
-    });
+    bubble.className = 'ctx-bubble' + (autoLocked ? ' ctx-bubble-locked' : '');
+    bubble.innerHTML = `${labels[ctx] || ctx}${autoLocked ? '' : '<button class="ctx-bubble-remove" title="Remove">×</button>'}`;
+    if (!autoLocked) {
+      bubble.querySelector('.ctx-bubble-remove').addEventListener('click', () => {
+        state.chatContextItems.delete(ctx);
+        if (ctx === 'css') state.cssContextChars = null;
+        if (ctx === 'dom') state.domContextChars = null;
+        renderChatContextBubbles();
+        updateTokenCounter();
+      });
+    }
     container.appendChild(bubble);
   }
 
-  container.classList.toggle('hidden', state.chatContextItems.size === 0);
+  const hasVisibleBubbles = [...state.chatContextItems].some(c => c !== 'screenshot' && c !== 'designref');
+  container.classList.toggle('hidden', !hasVisibleBubbles);
   updateTokenCounter();
 }
 
@@ -368,7 +388,10 @@ function updateTokenCounter() {
   chars += document.getElementById('chatInput').value.length;
 
   const items = state.chatContextItems;
-  if (items.has('dom'))        chars += 12000;
+  if (items.has('dom')) {
+    if (state.domContextChars === null) { el.textContent = '~… tokens'; return; }
+    chars += state.domContextChars;
+  }
   if (items.has('screenshot')) chars += 50000;
   if (items.has('designref'))  chars += 50000;
   if (items.has('css')) {
@@ -381,6 +404,49 @@ function updateTokenCounter() {
   el.textContent = `~${display} tokens`;
 }
 
+function autoFillMakeChangesContext() {
+  const makeChanges = document.getElementById('makeChangesCheck')?.checked;
+  if (!makeChanges) return;
+  // CSS and DOM are auto-injected by the backend on every Make Changes send —
+  // pre-populate the bubbles so the user can see what's going in.
+  if (!state.chatContextItems.has('dom')) {
+    state.chatContextItems.add('dom');
+    state.domContextChars = null;
+    send({ type: 'GET_DOM_CHARS', siteTabId: state.siteTabId }).then(r => {
+      state.domContextChars = r.chars ?? 12000;
+      updateTokenCounter();
+    }).catch(() => { state.domContextChars = 12000; updateTokenCounter(); });
+  }
+  if (!state.chatContextItems.has('css')) {
+    state.chatContextItems.add('css');
+    state.cssContextChars = null;
+    send({ type: 'GET_CSS_CHARS' }).then(r => {
+      state.cssContextChars = r.chars ?? 0;
+      updateTokenCounter();
+    }).catch(() => { state.cssContextChars = 0; updateTokenCounter(); });
+  }
+  renderChatContextBubbles();
+  updateTokenCounter();
+}
+
+function updateContextTagBadges() {
+  const el = document.getElementById('chatCtxTags');
+  if (!el) return;
+  el.innerHTML = '';
+  if (state.chatHasCss) {
+    const t = document.createElement('span');
+    t.className = 'chat-ctx-tag';
+    t.textContent = 'Has CSS';
+    el.appendChild(t);
+  }
+  if (state.chatHasDom) {
+    const t = document.createElement('span');
+    t.className = 'chat-ctx-tag';
+    t.textContent = 'Has DOM';
+    el.appendChild(t);
+  }
+}
+
 function appendChatMemo(text) {
   const el = document.createElement('div');
   el.className = 'chat-memo';
@@ -388,6 +454,19 @@ function appendChatMemo(text) {
   document.getElementById('chatMessages').appendChild(el);
   el.scrollIntoView({ block: 'end' });
   return el;
+}
+
+function isConversationalMessage(text) {
+  const t = text.trim().toLowerCase();
+  if (t.endsWith('?')) return true;
+  const conversationalPrefixes = [
+    'what ', 'why ', 'how ', 'when ', 'where ', 'which ', 'who ',
+    'did you', 'did it', 'does ', 'is ', 'are ', 'was ', 'were ',
+    'can you', 'could you', 'would you', 'should ',
+    'tell me', 'explain', 'show me', 'describe', 'list ',
+    'what\'s', 'what\'ve', 'how\'s', 'why\'s',
+  ];
+  return conversationalPrefixes.some(p => t.startsWith(p));
 }
 
 async function handleChatSend() {
@@ -407,17 +486,19 @@ async function handleChatSend() {
   const activeCtx = new Set(state.chatContextItems);
   state.chatContextItems.clear();
   state.cssContextChars = null;
+  updateChatMediaPreviews();
   renderChatContextBubbles();
   updateTokenCounter();
 
+  if (modeSeparator) modeSeparator.sentAfter = true;
   appendChatMessage('user', text);
   const assistantEl = appendChatMessage('assistant', '');
   assistantEl.classList.add('streaming');
-  assistantEl.innerHTML = '<span class="chat-thinking">Uploading…</span>';
+  assistantEl.innerHTML = '<span class="chat-thinking">Thinking…</span>';
 
-  // ── Make Changes mode: route through GENERATE_CSS (agent path) ──────────────
+  // ── Make Changes mode: route through GENERATE_CSS unless message is conversational ──
   const makeChanges = document.getElementById('makeChangesCheck')?.checked;
-  if (makeChanges) {
+  if (makeChanges && !isConversationalMessage(text)) {
     let agentPhase  = 'uploading';
     let agentBuffer = '';
     const port = chrome.runtime.connect({ name: 'generate' });
@@ -436,11 +517,15 @@ async function handleChatSend() {
           const cost = calcCost(msg.inputTokens, msg.outputTokens);
           const usage = document.createElement('div');
           usage.className = 'chat-token-usage';
-          usage.textContent = `↑ ${fmtTokens(msg.inputTokens)} · ↓ ${fmtTokens(msg.outputTokens)}${fmtCost(cost)}`;
+          usage.innerHTML = `<span class="tu-in">↑ ${fmtTokens(msg.inputTokens)}</span> · <span class="tu-out">↓ ${fmtTokens(msg.outputTokens)}</span>${fmtCostHtml(cost)}`;
           assistantEl.appendChild(usage);
         }
         sendBtn.disabled = false;
+        state.chatHasCss = true;
+        state.chatHasDom = true;
         updateTokenCounter();
+        updateContextTagBadges();
+        autoFillMakeChangesContext();
         // enterDiffMode appends diff nodes directly into #chatMessages
         enterDiffMode(msg.css || '', msg.originalCss || '');
       } else if (msg.type === 'CSS_ERROR') {
@@ -507,7 +592,7 @@ async function handleChatSend() {
         const cost = calcCost(msg.inputTokens, msg.outputTokens);
         const usage = document.createElement('div');
         usage.className = 'chat-token-usage';
-        usage.textContent = `↑ ${fmtTokens(msg.inputTokens)} · ↓ ${fmtTokens(msg.outputTokens)}${fmtCost(cost)}`;
+        usage.innerHTML = `<span class="tu-in">↑ ${fmtTokens(msg.inputTokens)}</span> · <span class="tu-out">↓ ${fmtTokens(msg.outputTokens)}</span>${fmtCostHtml(cost)}`;
         assistantEl.appendChild(usage);
       }
       updateTokenCounter();
@@ -534,6 +619,9 @@ async function handleChatSend() {
     screenshotDataUrl: activeCtx.has('screenshot') ? state.screenshotDataUrl : null,
     designRefDataUrl:  activeCtx.has('designref')  ? state.designRefDataUrl  : null,
   });
+
+  if (activeCtx.has('css')) { state.chatHasCss = true; updateContextTagBadges(); }
+  if (activeCtx.has('dom')) { state.chatHasDom = true; updateContextTagBadges(); }
 }
 
 function isThinking(raw) {
@@ -546,6 +634,61 @@ function extractThought(raw) {
 
 function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function handleChatCodeClick(e) {
+  const findBtn = e.target.closest('.chat-code-find');
+  if (findBtn) {
+    const code = findBtn.closest('.chat-code-wrap')?.querySelector('code')?.textContent ?? '';
+    const found = findCssBlockInEditor(code);
+    if (found) {
+      findBtn.textContent = 'Found!';
+      findBtn.classList.add('found');
+      setTimeout(() => { findBtn.textContent = 'Find'; findBtn.classList.remove('found'); }, 1500);
+    } else {
+      findBtn.textContent = 'Not found';
+      findBtn.classList.add('not-found');
+      setTimeout(() => { findBtn.textContent = 'Find'; findBtn.classList.remove('not-found'); }, 1500);
+    }
+    return;
+  }
+
+  const copyBtn = e.target.closest('.chat-code-copy');
+  if (!copyBtn) return;
+  const code = copyBtn.closest('.chat-code-wrap')?.querySelector('code')?.textContent ?? '';
+  navigator.clipboard.writeText(code).then(() => {
+    copyBtn.textContent = 'Copied!';
+    copyBtn.classList.add('copied');
+    setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 1500);
+  }).catch(() => {});
+}
+
+function findCssBlockInEditor(code) {
+  if (!cssIdeEditor) return false;
+  const trimmed = code.trim();
+
+  // Pass 1: search for the full block text
+  let cursor = cssIdeEditor.getSearchCursor(trimmed, CodeMirror.Pos(0, 0), { caseFold: false });
+  if (cursor.findNext()) {
+    const from = cursor.from(), to = cursor.to();
+    cssIdeEditor.setSelection(from, to);
+    cssIdeEditor.scrollIntoView({ from, to }, 80);
+    return true;
+  }
+
+  // Pass 2: fall back to just the first selector (text before the first '{')
+  const selectorMatch = trimmed.match(/^([^{]+)\{/);
+  if (!selectorMatch) return false;
+  const selector = selectorMatch[1].trim();
+  cursor = cssIdeEditor.getSearchCursor(selector, CodeMirror.Pos(0, 0), { caseFold: true });
+  if (cursor.findNext()) {
+    const from = cursor.from(), to = cursor.to();
+    cssIdeEditor.setSelection(from, to);
+    cssIdeEditor.scrollIntoView({ from, to }, 80);
+    return true;
+  }
+
+  return false;
 }
 
 function renderChatMarkdown(text) {
@@ -569,11 +712,17 @@ function renderChatMarkdown(text) {
     const codeMatch = line.match(/^\x00CODE(\d+)\x00$/);
     if (codeMatch) {
       const { lang, code } = codeBlocks[parseInt(codeMatch[1], 10)];
+      const isCss = lang.toLowerCase() === 'css';
+      const findBtn = isCss
+        ? `<button class="chat-code-find" title="Find in editor">` +
+          `<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/></svg>` +
+          `</button>`
+        : '';
       out.push(
         `<div class="chat-code-wrap">` +
         `<div class="chat-code-header">` +
         `<span class="chat-code-lang">${escapeHtml(lang)}</span>` +
-        `<button class="chat-code-copy" title="Copy">Copy</button>` +
+        `<div class="chat-code-actions">${findBtn}<button class="chat-code-copy" title="Copy">Copy</button></div>` +
         `</div>` +
         `<pre class="chat-code-block"><code>${escapeHtml(code)}</code></pre>` +
         `</div>`
@@ -755,6 +904,18 @@ function setupSettings() {
     document.getElementById('backupsOverlay').classList.remove('hidden');
   });
 
+  document.getElementById('manualBackupBtn').addEventListener('click', async () => {
+    const css = cssIdeEditor ? cssIdeEditor.getValue() : '';
+    try {
+      await send({ type: 'SAVE_BACKUP', css, label: 'Manual backup', starred: true });
+      openSettingsPanel();
+      document.getElementById('backupsOverlay').classList.remove('hidden');
+      await loadBackups();
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+
   document.getElementById('closeSettings').addEventListener('click', closeSettingsPanel);
 
   document.getElementById('saveSettings').addEventListener('click', async () => {
@@ -869,8 +1030,17 @@ function renderBackups(backups) {
     list.innerHTML = '<div class="backups-empty">No backups yet.</div>';
     return;
   }
+
+  // Starred entries first (by timestamp desc), then auto entries (by timestamp desc)
+  const sorted = [
+    ...backups.filter(b => b.starred).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+    ...backups.filter(b => !b.starred).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+  ];
+
   list.innerHTML = '';
-  backups.forEach((entry, index) => {
+  sorted.forEach((entry, displayIndex) => {
+    // Find the real index in the original array for RESTORE_BACKUP
+    const index = backups.indexOf(entry);
     const date = new Date(entry.timestamp);
     const formatted = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       + ' — ' + date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -878,10 +1048,10 @@ function renderBackups(backups) {
     const preview    = (entry.css || '').slice(0, 80).replace(/\s+/g, ' ').trim();
     const wasRestored = entry.timestamp === lastRestoredTimestamp;
     const el = document.createElement('div');
-    el.className = 'backup-entry';
+    el.className = 'backup-entry' + (entry.starred ? ' backup-starred' : '');
     el.innerHTML = `
       <div class="backup-entry-header">
-        <span class="backup-timestamp">${formatted}</span>
+        <span class="backup-timestamp">${entry.starred ? '<span class="backup-star">★</span> ' : ''}${formatted}</span>
         <button class="backup-restore" data-index="${index}">Restore</button>
       </div>
       ${label ? `<div class="backup-label">${label}</div>` : ''}
@@ -1691,6 +1861,12 @@ function fmtCost(cost) {
   return ` ~$${cost.toFixed(4)}`;
 }
 
+function fmtCostHtml(cost) {
+  if (cost === null) return '';
+  const str = cost < 0.0001 ? '~<$0.0001' : `~$${cost.toFixed(4)}`;
+  return ` · <span class="tu-cost">${str}</span>`;
+}
+
 function setLoading(btn, loading, text) {
   btn.textContent = text;
   btn.disabled = loading;
@@ -1753,7 +1929,15 @@ function setupCssIde() {
   document.getElementById('cssIdeRefresh').addEventListener('click', loadCssIde);
   document.getElementById('cssIdePublish').addEventListener('click', () => deployOrPublishCss(true));
   document.getElementById('cssIdeReloadPage').addEventListener('click', () => {
-    if (state.siteTabId) chrome.tabs.reload(state.siteTabId);
+    if (!state.siteTabId) return;
+    chrome.tabs.reload(state.siteTabId);
+    const onUpdated = (tabId, changeInfo) => {
+      if (tabId === state.siteTabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        send({ type: 'COLLAPSE_CUSTOMIZER_SIDEBAR' }).catch(() => {});
+      }
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
   });
 
   // Auto-write to Customizer field on every edit (debounced)
@@ -2744,62 +2928,73 @@ function setupChatSidebar() {
   });
   sendBtn.addEventListener('click', handleChatSend);
 
-  // Code copy delegated handler
-  document.getElementById('chatMessages').addEventListener('click', e => {
-    const btn = e.target.closest('.chat-code-copy');
-    if (!btn) return;
-    const code = btn.closest('.chat-code-wrap')?.querySelector('code')?.textContent ?? '';
-    navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = 'Copied!';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
-    }).catch(() => {});
-  });
+  // Code copy / find delegated handler
+  document.getElementById('chatMessages').addEventListener('click', handleChatCodeClick);
 
-  // Context "+" dropdown in sidebar
+  // Context "+" dropdown
   const addBtn   = document.getElementById('ctxAddBtn');
   const dropdown = document.getElementById('ctxDropdown');
 
   addBtn.addEventListener('click', e => {
     e.stopPropagation();
-    refreshCtxDropdownOptions();
+    updateCtxDropdownState();
     const wasHidden = dropdown.classList.contains('hidden');
     dropdown.classList.toggle('hidden');
     if (wasHidden) {
-      // Fixed-position so overflow:hidden on the panel never clips the menu
       const r = addBtn.getBoundingClientRect();
       Object.assign(dropdown.style, {
         position: 'fixed',
-        left:     r.left + 'px',
-        bottom:   (window.innerHeight - r.top + 4) + 'px',
-        top:      'auto',
-        right:    'auto',
+        left:   r.left + 'px',
+        bottom: (window.innerHeight - r.top + 4) + 'px',
+        top: 'auto', right: 'auto',
       });
     }
   });
 
   document.addEventListener('click', () => dropdown.classList.add('hidden'));
 
-  document.querySelectorAll('#ctxDropdown .ctx-opt').forEach(opt => {
-    opt.addEventListener('click', e => {
-      e.stopPropagation();
-      const ctx = opt.dataset.ctx;
-      if (ctx === 'css' && !state.chatContextItems.has('css')) {
-        state.cssContextChars = null;
-        updateTokenCounter();
-        send({ type: 'GET_CSS_CHARS' }).then(r => {
-          state.cssContextChars = r.chars ?? 0;
-          updateTokenCounter();
-        }).catch(() => { state.cssContextChars = 0; });
+  dropdown.addEventListener('click', async e => {
+    e.stopPropagation();
+    const opt = e.target.closest('.ctx-opt');
+    if (!opt || opt.disabled) return;
+
+    const group = opt.dataset.ctxGroup;
+    const ctx   = opt.dataset.ctx;
+
+    if (group) {
+      const members  = CTX_GROUPS[group] || [];
+      const available = members.filter(c => !(c === 'designref' && !state.designRefDataUrl));
+      const allOn    = available.every(c => state.chatContextItems.has(c));
+      if (allOn) {
+        available.forEach(c => removeCtxItem(c));
+      } else {
+        for (const c of available) {
+          if (!state.chatContextItems.has(c)) {
+            if (c === 'screenshot') {
+              dropdown.classList.add('hidden');
+              await handleTakeScreenshotForChat();
+              return;
+            }
+            addCtxItem(c);
+          }
+        }
       }
-      if (ctx === 'screenshot') handleTakeScreenshotForChat();
-      else {
-        state.chatContextItems.add(ctx);
+    } else if (ctx) {
+      if (state.chatContextItems.has(ctx)) {
+        removeCtxItem(ctx);
+      } else if (ctx === 'screenshot') {
         dropdown.classList.add('hidden');
-        renderChatContextBubbles();
-        updateTokenCounter();
+        await handleTakeScreenshotForChat();
+        return;
+      } else {
+        addCtxItem(ctx);
       }
-    });
+    }
+
+    updateCtxDropdownState();
+    updateChatMediaPreviews();
+    renderChatContextBubbles();
+    updateTokenCounter();
   });
 
   updateTokenCounter();
@@ -2812,11 +3007,62 @@ async function handleTakeScreenshotForChat() {
     state.screenshotDataUrl = dataUrl;
     state.screenshotTime    = new Date();
     state.chatContextItems.add('screenshot');
+    updateChatMediaPreviews();
+    updateCtxDropdownState();
     renderChatContextBubbles();
     updateTokenCounter();
   } catch (e) {
     console.error('[Screenshot]', e.message);
   }
+}
+
+function updateChatMediaPreviews() {
+  const el = document.getElementById('chatScreenshotPreview');
+  if (!el) return;
+  el.innerHTML = '';
+
+  function addThumb(dataUrl, removeTitle, onRemove) {
+    const item = document.createElement('div');
+    item.className = 'chat-ss-item';
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.className = 'chat-ss-thumb';
+    const rm = document.createElement('button');
+    rm.className = 'chat-ss-remove';
+    rm.title = removeTitle;
+    rm.textContent = '×';
+    rm.addEventListener('click', onRemove);
+    item.appendChild(img);
+    item.appendChild(rm);
+    el.appendChild(item);
+  }
+
+  if (state.screenshotDataUrl && state.chatContextItems.has('screenshot')) {
+    addThumb(state.screenshotDataUrl, 'Remove screenshot', () => {
+      removeCtxItem('screenshot');
+      updateCtxDropdownState();
+      renderChatContextBubbles();
+      updateTokenCounter();
+    });
+  }
+
+  if (state.designRefDataUrl && state.chatContextItems.has('designref')) {
+    addThumb(state.designRefDataUrl, 'Remove design ref', () => {
+      removeCtxItem('designref');
+      updateCtxDropdownState();
+      renderChatContextBubbles();
+      updateTokenCounter();
+    });
+  }
+
+  el.classList.toggle('hidden', el.children.length === 0);
+}
+
+function updateChatPlaceholder() {
+  const input = document.getElementById('chatInput');
+  if (!input) return;
+  const makeChanges = document.getElementById('makeChangesCheck')?.checked;
+  input.placeholder = makeChanges ? 'Request a change for the page…' : 'Ask anything about the page…';
 }
 
 // ─── Chat Tabs ────────────────────────────────────────────────────────────────
@@ -2837,6 +3083,8 @@ function snapshotCurrentSession() {
   if (current) {
     current.domHtml  = document.getElementById('chatMessages').innerHTML;
     current.history  = [...state.chatHistory];
+    current.hasCss   = state.chatHasCss;
+    current.hasDom   = state.chatHasDom;
   }
 }
 
@@ -2848,12 +3096,19 @@ function openNewChatSession(label) {
   chatSessions.push({ id, label: label || `Chat ${chatSessions.length + 1}`, history: [], domHtml: '' });
   activeChatId = id;
   state.chatHistory = [];
+  state.chatHasCss  = false;
+  state.chatHasDom  = false;
   state.chatContextItems.clear();
   state.cssContextChars = null;
+  state.domContextChars = null;
+  modeSeparator = null;
   document.getElementById('chatMessages').innerHTML = '';
   document.getElementById('chatInput').value = '';
+  updateChatMediaPreviews();
   renderChatContextBubbles();
   updateTokenCounter();
+  updateContextTagBadges();
+  autoFillMakeChangesContext();
   renderChatTabs();
 }
 
@@ -2868,9 +3123,12 @@ function switchChatSession(id) {
   if (!next) return;
   activeChatId = id;
   state.chatHistory    = [...next.history];
+  state.chatHasCss     = next.hasCss || false;
+  state.chatHasDom     = next.hasDom || false;
   state.chatContextItems.clear();
   state.cssContextChars = null;
 
+  modeSeparator = null;
   // Restore DOM snapshot — preserves all rendered markdown, token counts, etc.
   const messagesEl = document.getElementById('chatMessages');
   messagesEl.innerHTML = next.domHtml || '';
@@ -2878,8 +3136,10 @@ function switchChatSession(id) {
     messagesEl.lastElementChild.scrollIntoView({ block: 'end' });
   }
 
+  updateChatMediaPreviews();
   renderChatContextBubbles();
   updateTokenCounter();
+  updateContextTagBadges();
   renderChatTabs();
 }
 
@@ -2904,6 +3164,22 @@ function closeChatSession(id) {
   } else {
     renderChatTabs();
   }
+}
+
+function renderAgentSessionMenu() {
+  const list = document.getElementById('agentSessionList');
+  if (!list) return;
+  list.innerHTML = '';
+  chatSessions.forEach(session => {
+    const btn = document.createElement('button');
+    btn.className = 'agent-session-item' + (session.id === activeChatId ? ' active' : '');
+    btn.textContent = session.label;
+    btn.addEventListener('click', () => {
+      document.getElementById('agentSessionMenu')?.classList.add('hidden');
+      switchChatSession(session.id);
+    });
+    list.appendChild(btn);
+  });
 }
 
 function renderChatTabs() {
@@ -2964,6 +3240,73 @@ function setupAgentFlap() {
     flap.classList.remove('resizing');   // restore transition for open/close
   });
 
+  // ── Make Changes toggle → auto-fill CSS+DOM bubbles ───────────────────────
+  const updateSbModeVisibility = () => {
+    const on = document.getElementById('makeChangesCheck')?.checked;
+    document.getElementById('sbModeWrap')?.classList.toggle('hidden', !on);
+  };
+
+  const mcCheck = document.getElementById('makeChangesCheck');
+  if (mcCheck) {
+    mcCheck.addEventListener('change', () => {
+      updateSbModeVisibility();
+      updateChatPlaceholder();
+      const chatMessages = document.getElementById('chatMessages');
+      const hasRealMessages = Array.from(chatMessages.children).some(
+        c => !c.classList.contains('chat-mode-separator')
+      );
+
+      if (modeSeparator && !modeSeparator.sentAfter) {
+        // Switched back without sending — undo the separator, context unchanged
+        modeSeparator.node.remove();
+        modeSeparator = null;
+      } else if (hasRealMessages) {
+        const sep = document.createElement('div');
+        sep.className = 'chat-mode-separator';
+        sep.innerHTML = `<span>${mcCheck.checked ? 'Make Changes' : 'Chat'}</span>`;
+        chatMessages.appendChild(sep);
+        modeSeparator = { node: sep, sentAfter: false };
+      }
+
+      if (mcCheck.checked) {
+        autoFillMakeChangesContext();
+      } else {
+        // Remove the auto-injected bubbles so the user can add them manually
+        state.chatContextItems.delete('css');
+        state.chatContextItems.delete('dom');
+        state.cssContextChars = null;
+        state.domContextChars = null;
+        renderChatContextBubbles();
+        updateTokenCounter();
+      }
+    });
+    // Pre-fill on load since the toggle defaults to ON
+    autoFillMakeChangesContext();
+    updateSbModeVisibility();
+    updateChatPlaceholder();
+  }
+
+  // ── Session menu (plus button) ────────────────────────────────────────────
+  const refreshBtn = document.getElementById('agentFlapRefresh');
+  const sessionMenu = document.getElementById('agentSessionMenu');
+  if (refreshBtn && sessionMenu) {
+    refreshBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const isOpen = !sessionMenu.classList.contains('hidden');
+      sessionMenu.classList.toggle('hidden', isOpen);
+      if (!isOpen) renderAgentSessionMenu();
+    });
+    document.getElementById('agentSessionNew')?.addEventListener('click', () => {
+      sessionMenu.classList.add('hidden');
+      openNewChatSession();
+    });
+    document.addEventListener('click', e => {
+      if (!document.getElementById('agentFlapSessionWrap')?.contains(e.target)) {
+        sessionMenu.classList.add('hidden');
+      }
+    });
+  }
+
   // ── Reconsolidate ─────────────────────────────────────────────────────────
   const reconBtn = document.getElementById('reconsolidate');
   if (reconBtn) reconBtn.addEventListener('click', () => {
@@ -3008,6 +3351,7 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
   if (chatSessions.length === 0) openNewChatSession();
 
   // Show user message in chat
+  if (modeSeparator) modeSeparator.sentAfter = true;
   appendChatMessage('user', instructions === '__reconsolidate__' ? 'Fully Reconsolidate CSS' : instructions);
 
   setAgentFlapLoading(true);
@@ -3015,7 +3359,7 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
 
   const assistantEl = appendChatMessage('assistant', '');
   assistantEl.classList.add('streaming');
-  assistantEl.innerHTML = '<span class="chat-thinking">Uploading…</span>';
+  assistantEl.innerHTML = '<span class="chat-thinking">Thinking…</span>';
 
   let agentBuffer = '';
   let agentPhase  = 'uploading';
@@ -3036,12 +3380,12 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
         const cost = calcCost(msg.inputTokens, msg.outputTokens);
         const usage = document.createElement('div');
         usage.className = 'chat-token-usage';
-        usage.textContent = `↑ ${fmtTokens(msg.inputTokens)} · ↓ ${fmtTokens(msg.outputTokens)}${fmtCost(cost)}`;
+        usage.innerHTML = `<span class="tu-in">↑ ${fmtTokens(msg.inputTokens)}</span> · <span class="tu-out">↓ ${fmtTokens(msg.outputTokens)}</span>${fmtCostHtml(cost)}`;
         assistantEl.appendChild(usage);
       }
       setAgentFlapLoading(false);
-      // Enter diff mode in the CSS editor
-      enterDiffMode(newCss, msg.originalCss || '');
+      // Enter diff mode; reconsolidate collapses all hunks into one decision
+      enterDiffMode(newCss, msg.originalCss || '', instructions === '__reconsolidate__');
     } else if (msg.type === 'CSS_ERROR') {
       assistantEl.classList.remove('streaming');
       assistantEl.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(msg.error)}</span>`;
@@ -3079,7 +3423,10 @@ function setAgentFlapLoading(loading) {
 
 let diffHunks = []; // [{ id, oldMark, newMark, widget, chatNode, status: 'pending'|'approved'|'rejected' }]
 
-function enterDiffMode(newCss, originalCss) {
+// Tracks the most recent mode-switch separator so it can be removed if no message is sent
+let modeSeparator = null; // { node: HTMLElement, sentAfter: boolean }
+
+function enterDiffMode(newCss, originalCss, unified = false) {
   if (!cssIdeEditor) return;
 
   const currentCss = originalCss || cssIdeEditor.getValue();
@@ -3137,7 +3484,6 @@ function enterDiffMode(newCss, originalCss) {
 
       const chatNode = buildChatDiffNode(id, hunkData);
       document.getElementById('chatMessages').appendChild(chatNode);
-      chatNode.scrollIntoView({ block: 'end' });
 
       diffHunks.push({
         id, hunk: hunkData, lineWidget, widgetEl, chatNode,
@@ -3151,6 +3497,44 @@ function enterDiffMode(newCss, originalCss) {
   }
 
   if (diffHunks.length === 0) return;
+
+  // Reconsolidate: collapse all hunks into one accept/reject decision
+  if (unified && diffHunks.length > 1) {
+    diffHunks.forEach(h => {
+      try { h.lineWidget.clear(); } catch (_) {}
+      if (h.chatNode && h.chatNode.parentNode) h.chatNode.remove();
+    });
+
+    const allRemoveLines = diffHunks.flatMap(h => h.removeLines);
+    const allAddLines    = diffHunks.flatMap(h => h.addLines);
+    const startLine      = diffHunks[0].startLine;
+    const endLine        = diffHunks[diffHunks.length - 1].endLine;
+    const mergedData = {
+      removed:  allRemoveLines.map(ln => cssIdeEditor.getLine(ln)),
+      added:    allAddLines.map(ln => cssIdeEditor.getLine(ln)),
+      newStart: startLine,
+      newEnd:   endLine,
+    };
+
+    const uid        = 'hunk-0';
+    const wEl        = buildHunkWidget(uid, mergedData);
+    const wLine      = cssIdeEditor.addLineWidget(endLine, wEl, {
+      above: false, handleMouseEvents: true, noHScroll: true,
+    });
+    const cNode = buildChatDiffNode(uid, mergedData);
+    document.getElementById('chatMessages').appendChild(cNode);
+
+    diffHunks = [{
+      id: uid, hunk: mergedData, lineWidget: wLine, widgetEl: wEl, chatNode: cNode,
+      status: 'pending', startLine, endLine,
+      removeLines: allRemoveLines, addLines: allAddLines,
+    }];
+  }
+
+  // Auto-scroll to the first diff hunk (same as clicking "Scroll to next")
+  if (diffHunks.length > 0) {
+    setTimeout(() => jumpToHunk(diffHunks[0].id), 100);
+  }
 
   document.getElementById('cssIdeFooter').classList.add('hidden');
   document.getElementById('diffModeBar').classList.remove('hidden');
@@ -3227,11 +3611,11 @@ function buildChatDiffNode(id, hunk) {
         ${a ? `<span class="diff-added">+${a}</span>` : ''}
         ${r ? `<span class="diff-removed">−${r}</span>` : ''}
       </span>
-      <button class="chat-diff-node-jump" data-hunk="${id}">Jump ↗</button>
-    </div>
-    <div class="chat-diff-node-actions">
-      <button class="chat-diff-node-approve" data-hunk="${id}">Accept</button>
-      <button class="chat-diff-node-reject"  data-hunk="${id}">Reject</button>
+      <div class="chat-diff-node-actions">
+        <button class="chat-diff-node-approve" data-hunk="${id}">✓ Accept</button>
+        <button class="chat-diff-node-reject"  data-hunk="${id}">✕ Reject</button>
+        <button class="chat-diff-node-jump" data-hunk="${id}">↗</button>
+      </div>
     </div>
   `;
   el.querySelector('.chat-diff-node-jump').addEventListener('click', () => jumpToHunk(id));
@@ -3310,6 +3694,12 @@ function resolveHunk(id, resolution) {
   updateDiffModeBar();
 
   if (diffHunks.every(h => h.status !== 'pending')) {
+    const accepted = diffHunks.filter(h => h.status === 'approved').length;
+    const rejected = diffHunks.filter(h => h.status === 'rejected').length;
+    const reviewLabel = accepted && rejected
+      ? `After review (${accepted} accepted, ${rejected} rejected)`
+      : accepted ? 'After review (all accepted)' : 'After review (all rejected)';
+    send({ type: 'SAVE_BACKUP', css: cssIdeEditor.getValue(), label: reviewLabel }).catch(() => {});
     setTimeout(() => exitDiffMode(), 600);
   } else {
     scrollToNextPendingHunk(hunkIdx);

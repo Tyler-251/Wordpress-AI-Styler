@@ -560,6 +560,13 @@ body {
 }
 .ctx-bubble-remove:hover { opacity: 1; background: rgba(22,124,255,0.2); }
 
+/* Locked bubbles — auto-injected by Make Changes mode, not removable */
+.ctx-bubble.ctx-bubble-locked {
+  padding: 3px 10px;
+  opacity: 0.75;
+  border-style: dashed;
+}
+
 /* ─── Context Add Button + Dropdown ─────────────────────────────────────────── */
 
 .ctx-add-wrap {
@@ -601,10 +608,13 @@ body {
   overflow: hidden;
 }
 
+/* Group headers */
 .ctx-opt {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 7px 12px;
   background: none;
   border: none;
   text-align: left;
@@ -614,20 +624,115 @@ body {
   cursor: pointer;
   transition: background 0.12s;
 }
-.ctx-opt:hover { background: var(--bg-surface-hover); }
-.ctx-opt:disabled {
+.ctx-opt:hover:not(:disabled) { background: var(--bg-surface-hover); }
+.ctx-opt:disabled,
+.ctx-opt.ctx-opt-locked { color: var(--text-secondary); opacity: 0.45; cursor: not-allowed; }
+.ctx-opt.ctx-opt-unavailable { opacity: 0.35; cursor: not-allowed; }
+
+.ctx-opt-label { flex: 1; }
+
+.ctx-opt-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
   color: var(--text-secondary);
-  opacity: 0.45;
-  cursor: not-allowed;
 }
+.ctx-icon-code { font-weight: 700; letter-spacing: -0.5px; }
+
+.ctx-item-state {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+
+/* Indented children */
+.ctx-child {
+  padding-left: 28px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.ctx-child:hover:not(:disabled) { color: var(--text-primary); }
+
+/* Group headers */
+.ctx-group-hd {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ctx-group-hd .ctx-opt-icon { color: var(--text-secondary); }
+
+/* State indicator colors */
+.ctx-item-state.ctx-state-full    { color: var(--accent); }
+.ctx-item-state.ctx-state-partial { color: #f4a44a; }
+
+/* Group header separator line above second group */
+.ctx-group-hd + .ctx-group-hd,
+.ctx-child + .ctx-group-hd {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 9px;
+}
+
+/* Screenshot / design ref preview thumbnails in input area */
+.chat-screenshot-preview {
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 8px 2px;
+  gap: 8px;
+}
+
+.chat-ss-item {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.chat-ss-thumb {
+  height: 56px;
+  width: auto;
+  max-width: 100px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  display: block;
+}
+
+.chat-ss-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(26, 26, 26, 0.85);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+.chat-ss-remove:hover { color: var(--danger); border-color: var(--danger); }
 
 .chat-token-usage {
   margin-top: 6px;
   font-size: 10px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   color: var(--text-secondary);
-  opacity: 0.55;
+  opacity: 0.7;
 }
+.chat-token-usage .tu-in   { color: #6aabff; }
+.chat-token-usage .tu-out  { color: #f4a44a; }
+.chat-token-usage .tu-cost { color: #5ec97e; }
 
 .chat-token-count {
   margin-left: auto;
@@ -644,6 +749,27 @@ body {
   border: 1px solid var(--border);
   border-radius: 99px;
   padding: 3px 10px;
+}
+
+.chat-mode-separator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.chat-mode-separator::before,
+.chat-mode-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.chat-mode-separator span {
+  white-space: nowrap;
 }
 
 .chat-input {
@@ -1268,7 +1394,14 @@ select.select-input option {
   text-transform: lowercase;
 }
 
-.chat-code-copy {
+.chat-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-code-copy,
+.chat-code-find {
   padding: 2px 8px;
   background: none;
   border: 1px solid var(--border);
@@ -1279,7 +1412,8 @@ select.select-input option {
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.chat-code-copy:hover {
+.chat-code-copy:hover,
+.chat-code-find:hover {
   background: var(--bg-surface-hover);
   color: var(--text-primary);
   border-color: rgba(255,255,255,0.2);
@@ -1287,6 +1421,20 @@ select.select-input option {
 .chat-code-copy.copied {
   color: var(--success);
   border-color: var(--success);
+}
+.chat-code-find {
+  padding: 2px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-code-find.found {
+  color: var(--success);
+  border-color: var(--success);
+}
+.chat-code-find.not-found {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ─── Context Stats Bar ──────────────────────────────────────────────────────── */
@@ -2298,6 +2446,53 @@ kbd#sbShortcutKey {
   border-color: rgba(255,255,255,0.2);
 }
 
+/* History button group [ History | + ] */
+.history-btn-group {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.history-btn-group .history-open-btn {
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid var(--border);
+  height: 26px;
+}
+.history-btn-group .history-open-btn:hover {
+  border-right-color: rgba(255,255,255,0.2);
+}
+.history-add-btn {
+  height: 26px;
+  padding: 0 9px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+.history-add-btn:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+/* Starred backup entries */
+.backup-entry.backup-starred {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.05);
+}
+.backup-star {
+  color: #fbbf24;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 /* ✦ Chat — VS Code-style floating action button */
 .chat-toggle-btn {
   display: inline-flex;
@@ -2592,6 +2787,7 @@ kbd#sbShortcutKey {
   overflow-y: auto;
   padding: 10px 12px;
   gap: 12px;
+  position: relative;
 }
 
 #agentFlapBody .chat-input-area {
@@ -2705,6 +2901,7 @@ kbd#sbShortcutKey {
   gap: 8px;
   padding: 6px 10px;
   border-top: 1px solid rgba(245, 158, 11, 0.3);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.3);
   background: rgba(245, 158, 11, 0.06);
   flex-shrink: 0;
 }
@@ -2796,6 +2993,9 @@ kbd#sbShortcutKey {
   border-radius: var(--radius-md);
   overflow: hidden;
   margin: 4px 0;
+  flex-shrink: 0;
+  width: 100%;
+  min-height: 0;
 }
 
 .chat-diff-node-header {
@@ -2804,7 +3004,6 @@ kbd#sbShortcutKey {
   gap: 8px;
   padding: 6px 10px;
   background: rgba(255,255,255,0.03);
-  border-bottom: 1px solid var(--border);
   font-size: 11px;
 }
 
@@ -2820,8 +3019,43 @@ kbd#sbShortcutKey {
 .chat-diff-node-count .diff-added   { color: #4ade80; }
 .chat-diff-node-count .diff-removed { color: #f87171; }
 
+.chat-diff-node-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.chat-diff-node-approve {
+  padding: 3px 9px;
+  border: 1px solid rgba(76, 175, 125, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(76, 175, 125, 0.08);
+  color: var(--success);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chat-diff-node-approve:hover { background: rgba(76, 175, 125, 0.18); }
+
+.chat-diff-node-reject {
+  padding: 3px 9px;
+  border: 1px solid rgba(232, 87, 87, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(232, 87, 87, 0.08);
+  color: var(--danger);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chat-diff-node-reject:hover { background: rgba(232, 87, 87, 0.18); }
+
 .chat-diff-node-jump {
-  padding: 2px 8px;
+  padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: none;
@@ -2833,48 +3067,121 @@ kbd#sbShortcutKey {
 }
 .chat-diff-node-jump:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
 
-.chat-diff-node-actions {
-  display: flex;
-  gap: 5px;
-  padding: 5px 8px;
-}
-
-.chat-diff-node-approve {
-  flex: 1;
-  padding: 4px 0;
-  border: 1px solid rgba(76, 175, 125, 0.4);
-  border-radius: var(--radius-sm);
-  background: rgba(76, 175, 125, 0.08);
-  color: var(--success);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.chat-diff-node-approve:hover { background: rgba(76, 175, 125, 0.18); }
-
-.chat-diff-node-reject {
-  flex: 1;
-  padding: 4px 0;
-  border: 1px solid rgba(232, 87, 87, 0.4);
-  border-radius: var(--radius-sm);
-  background: rgba(232, 87, 87, 0.08);
-  color: var(--danger);
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.chat-diff-node-reject:hover { background: rgba(232, 87, 87, 0.18); }
-
 .chat-diff-node.resolved {
   opacity: 0.45;
   pointer-events: none;
 }
 .chat-diff-node.resolved-approve { border-color: rgba(76, 175, 125, 0.3); }
 .chat-diff-node.resolved-reject  { border-color: rgba(232, 87, 87, 0.3); }
+
+/* ─── Chat context tags (Has CSS / Has DOM indicators) ───────────────────────── */
+
+.chat-ctx-tags {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.chat-ctx-tag {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(99, 148, 242, 0.35);
+  background: rgba(99, 148, 242, 0.08);
+  color: rgba(99, 148, 242, 0.85);
+  white-space: nowrap;
+}
+
+/* ─── Agent flap session menu ────────────────────────────────────────────────── */
+
+.agent-flap-session-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.agent-flap:not(.open) .agent-flap-session-wrap {
+  display: none;
+}
+
+.agent-flap-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 12px;
+  margin-right: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.agent-flap-refresh:hover {
+  background: var(--bg-surface-hover);
+  border-color: rgba(255,255,255,0.18);
+  color: var(--text-primary);
+}
+
+.agent-session-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  z-index: 200;
+  overflow: hidden;
+}
+
+.agent-session-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-session-item {
+  padding: 7px 12px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-session-item:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.agent-session-item.active { color: var(--accent); }
+
+.agent-session-new {
+  padding: 7px 12px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.12s, color 0.12s;
+}
+.agent-session-new:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+
+/* ─── Make Changes toggle — inline footer variant ───────────────────────────── */
+
+.make-changes-toggle-inline {
+  gap: 5px;
+  flex-shrink: 0;
+}
 
 /* ─── Design Reference (Settings) ───────────────────────────────────────────── */
 

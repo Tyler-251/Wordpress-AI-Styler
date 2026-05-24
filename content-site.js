@@ -1,14 +1,36 @@
 // Injected into all pages — returns a compact DOM snapshot and detects form step
 
+// Attributes that are noisy / non-semantic and not useful for CSS targeting
+const SKIP_ATTRS = new Set([
+  'style', 'class', 'id',
+  'src', 'srcset', 'href', 'alt', 'title',
+  'width', 'height', 'loading', 'decoding', 'crossorigin', 'fetchpriority',
+  'tabindex', 'aria-hidden', 'aria-label', 'aria-labelledby', 'aria-describedby',
+]);
+
 function domSnapshot(root) {
   const nodes = [];
   function walk(el, depth) {
     if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
     const id      = el.id || '';
-    const classes = Array.from(el.classList).slice(0, 8);
-    // Only include elements that are targetable with CSS (have an id or classes)
-    if (id || classes.length) {
-      nodes.push({ tag: el.tagName.toLowerCase(), id, classes, depth });
+    const classes = Array.from(el.classList);
+
+    // Collect all non-event, non-presentational attributes (includes data-*, custom attrs)
+    const attrs = {};
+    for (const { name, value } of el.attributes) {
+      if (!name.startsWith('on') && !SKIP_ATTRS.has(name) && value !== '') {
+        attrs[name] = value;
+      }
+    }
+    const hasAttrs = Object.keys(attrs).length > 0;
+
+    // Only include elements targetable by CSS
+    if (id || classes.length || hasAttrs) {
+      const node = { tag: el.tagName.toLowerCase(), depth };
+      if (id)           node.id      = id;
+      if (classes.length) node.classes = classes;
+      if (hasAttrs)     node.attrs   = attrs;
+      nodes.push(node);
     }
     for (const child of el.children) walk(child, depth + 1);
   }

@@ -20,15 +20,16 @@ Rules:
     patch: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
 
-Return ONLY the CSS rules that need to be added or changed — not the entire file.
+Return ONLY the selector blocks that need to be added or changed — not the entire file.
 Wrap your response in <css> tags:
 <css>
-/* only the new or modified rules */
+/* only the new or modified selector blocks */
 </css>
 
 Rules:
-- Include a rule in full if any part of it changes.
-- Do not include rules that are unchanged.
+- A "block" means the ENTIRE selector + every declaration inside it, from the opening { to the closing } — all lines, including unchanged properties.
+- NEVER output a partial block. If only background-color changes inside .foo { ... }, output the complete .foo { ... } block with all its properties rewritten.
+- Do not output blocks that are completely unchanged.
 - Do not output anything outside the <css></css> tags.
 - No explanations, no markdown, no code fences.`,
   },
@@ -52,15 +53,16 @@ Rules:
     patch: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS, a DOM structure summary, and optionally a screenshot and/or design reference image.
 
-Return ONLY the CSS rules that need to be added or changed — not the entire file.
+Return ONLY the selector blocks that need to be added or changed — not the entire file.
 Wrap your response in <css> tags:
 <css>
-/* only the new or modified rules */
+/* only the new or modified selector blocks */
 </css>
 
 Rules:
-- Include a rule in full if any part of it changes.
-- Do not include rules that are unchanged.
+- A "block" means the ENTIRE selector + every declaration inside it, from the opening { to the closing } — all lines, including unchanged properties.
+- NEVER output a partial block. If only background-color changes inside .foo { ... }, output the complete .foo { ... } block with all its properties rewritten.
+- Do not output blocks that are completely unchanged.
 - Do not output anything outside the <css></css> tags.
 - No explanations, no markdown, no code fences.`,
   },
@@ -76,11 +78,13 @@ Wrap the full file in <css> tags:
 No explanations. No markdown. Nothing outside the <css></css> tags.`,
 
     patch: `/no_think
-You are a CSS expert. Return ONLY the CSS rules that need to be added or changed to fulfil the user's request.
-Do NOT return the entire CSS file. Return only new or modified rules, wrapped in <css> tags:
+You are a CSS expert. Return ONLY the selector blocks that need to be added or changed to fulfil the user's request.
+Do NOT return the entire CSS file. Wrap your response in <css> tags:
 <css>
-/* only the changed or new rules here */
+/* only the changed or new selector blocks here */
 </css>
+A "block" means the ENTIRE selector + all its declarations from { to } — never a partial block or single property in isolation.
+If any property inside a block changes, output the complete block with every declaration rewritten.
 No explanations. No markdown. Nothing outside the <css></css> tags.`,
   },
 
@@ -103,15 +107,16 @@ Rules:
     patch: `You are a CSS expert helping style a WordPress site.
 You will receive the current Additional CSS and a DOM structure summary.
 
-Return ONLY the CSS rules that need to be added or changed — not the entire file.
+Return ONLY the selector blocks that need to be added or changed — not the entire file.
 Wrap your response in <css> tags:
 <css>
-/* only the new or modified rules */
+/* only the new or modified selector blocks */
 </css>
 
 Rules:
-- Include a rule in full if any part of it changes.
-- Do not include rules that are unchanged.
+- A "block" means the ENTIRE selector + every declaration inside it, from the opening { to the closing } — all lines, including unchanged properties.
+- NEVER output a partial block. If only background-color changes inside .foo { ... }, output the complete .foo { ... } block with all its properties rewritten.
+- Do not output blocks that are completely unchanged.
 - Do not output anything outside the <css></css> tags.
 - No explanations, no markdown, no code fences.`,
   },
@@ -132,6 +137,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 
 // ─── One-shot messages (settings, backups, write, screenshot) ─────────────────
 
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   handleMessage(msg).then(sendResponse).catch(err => {
     console.error('[WPStyler]', err);
@@ -145,7 +151,7 @@ async function handleMessage(msg) {
     case 'TAKE_SCREENSHOT':   return takeScreenshot();
     case 'WRITE_CSS':         return writeCss(msg.css, msg.autoPublish);
     case 'GET_BACKUPS':       return getBackups();
-    case 'SAVE_BACKUP':       return saveBackup(msg.css, msg.label);
+    case 'SAVE_BACKUP':       return saveBackup(msg.css, msg.label, msg.starred);
     case 'RESTORE_BACKUP':    return restoreBackup(msg.index);
     case 'CLEAR_BACKUPS':     return clearBackups();
     case 'GET_SETTINGS':      return getSettings();
@@ -169,11 +175,34 @@ async function handleMessage(msg) {
       const text = await testResp.text();
       return { message: text.trim() || 'Connected' };
     }
+    case 'COLLAPSE_CUSTOMIZER_SIDEBAR': {
+      const custTab = await findCustomizerTab();
+      if (!custTab) return { success: false };
+      await chrome.scripting.executeScript({
+        target: { tabId: custTab.id },
+        world: 'MAIN',
+        func: () => {
+          const btn = document.querySelector('button.collapse-sidebar');
+          if (btn && btn.getAttribute('aria-expanded') === 'true') btn.click();
+        },
+      });
+      return { success: true };
+    }
     case 'GET_CSS_CHARS': {
       const custTab = await findCustomizerTab();
       if (!custTab) return { chars: 0 };
       const css = await readCssFromTab(custTab.id);
       return { chars: css ? css.length : 0 };
+    }
+    case 'GET_DOM_CHARS': {
+      if (!msg.siteTabId) return { chars: 12000 };
+      try {
+        const frame = await resolveContentFrame(msg.siteTabId);
+        const dom = await getDomSnapshot(frame.tabId, null, frame.frameId);
+        return { chars: dom ? JSON.stringify(dom).length : 0 };
+      } catch (_) {
+        return { chars: 12000 };
+      }
     }
     case 'GET_CSS': {
       const custTab = await findCustomizerTab();
@@ -1464,11 +1493,18 @@ async function getBackups() {
   return { backups: r.ss_backups || [] };
 }
 
-async function saveBackup(css, label) {
+async function saveBackup(css, label, starred = false) {
   const { backups } = await getBackups();
-  // Skip if the CSS is identical to the most recent backup
-  if (backups.length && backups[0].css === css) return { backups };
-  const updated = [{ timestamp: new Date().toISOString(), css, label: label || '' }, ...backups].slice(0, 100);
+  // Skip identical CSS only for auto-backups (not manual starred ones)
+  if (!starred && backups.length && backups[0].css === css) return { backups };
+  const entry = { timestamp: new Date().toISOString(), css, label: label || '' };
+  if (starred) entry.starred = true;
+  const all = [entry, ...backups];
+  // Starred backups are never trimmed; auto-backups capped at 100
+  const starredEntries = all.filter(b => b.starred);
+  const autoEntries    = all.filter(b => !b.starred).slice(0, 100);
+  const updated = [...starredEntries, ...autoEntries]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   await chrome.storage.local.set({ ss_backups: updated });
   return { backups: updated };
 }
