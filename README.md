@@ -31,7 +31,7 @@ Click the **⚙ Config** button in the top-right corner of the panel.
 
 Select one of the four backends from the **AI Backend** toggle:
 
-#### Claude (recommended)
+#### Claude
 1. Click **Get API Key ↗** — this opens [platform.claude.com](https://platform.claude.com)
 2. Sign in, navigate to **API Keys**, and create a new key
 3. Paste the key into the **API Key** field
@@ -44,7 +44,7 @@ Select one of the four backends from the **AI Backend** toggle:
 3. Paste it into the **API Key** field and click **Verify API Key**
 4. Choose a model — **GPT-4.1 Mini** is recommended
 
-#### DeepSeek
+#### DeepSeek (Least Expensive)
 1. Click **Get API Key ↗** — this opens [platform.deepseek.com](https://platform.deepseek.com)
 2. Create an API key and paste it in
 3. Click **Verify API Key** — **V4 Flash** is the recommended model
@@ -57,6 +57,7 @@ Select one of the four backends from the **AI Backend** toggle:
 2. Enter your server URL (default: `http://localhost:11434`)
 3. Set a **Text Model** (e.g. `llama3`) and optionally a **Vision Model** (e.g. `llava`) for screenshot support
 4. Click **Test** to confirm the connection
+5. Optional Cloudflare tags for homebrew auth setups
 
 ### 4. Save
 
@@ -118,17 +119,6 @@ Switch to the **CSS** tab for a full editor view of your Additional CSS. You can
 | **Chat** | Ask anything — the AI can answer questions about the page or CSS with optional DOM/screenshot context |
 | **Agent** | Generate or revise full CSS rewrites with instructions |
 | **Docs** | Quick-access links to CSS references and your saved docs |
-
----
-
-## Status Bar
-
-The thin bar at the bottom of the panel shows:
-
-- **AI provider** — click to switch between Claude, OpenAI, DeepSeek, and Ollama
-- **Model** — click to switch models within the current provider (hidden for Ollama)
-- **Mode** — on the Agent tab, switch between **Full Rewrite** (returns the entire CSS file) and **Patch Mode** (returns only changed rules — faster and cheaper)
-- **Ctrl+i / ⌘i** — reminder of the inline edit shortcut, shown on the CSS tab
 
 ---
 
