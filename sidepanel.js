@@ -2608,6 +2608,8 @@ function setupChatSidebar() {
 
   toggleBtn.addEventListener('click', () => {
     const isOpen = sidebar.classList.contains('open');
+    // Lazy-create first session on first open
+    if (!isOpen && chatSessions.length === 0) openNewChatSession();
     sidebar.classList.toggle('open', !isOpen);
     toggleBtn.classList.toggle('active', !isOpen);
   });
@@ -2692,18 +2694,30 @@ async function handleTakeScreenshotForChat() {
 
 // ─── Chat Tabs ────────────────────────────────────────────────────────────────
 
-let chatSessions = [];  // [{ id, label, history }]
+// Each session: { id, label, history: [], domHtml: '' }
+let chatSessions = [];
 let activeChatId = null;
 
 function setupChatTabs() {
+  // No auto-create — first session is created lazily when sidebar first opens
   document.getElementById('chatNewTabBtn').addEventListener('click', () => openNewChatSession());
-  // Start with one session
-  openNewChatSession();
+}
+
+function snapshotCurrentSession() {
+  if (!activeChatId) return;
+  const current = chatSessions.find(s => s.id === activeChatId);
+  if (current) {
+    current.domHtml  = document.getElementById('chatMessages').innerHTML;
+    current.history  = [...state.chatHistory];
+  }
 }
 
 function openNewChatSession(label) {
+  // Snapshot the outgoing session before clearing
+  snapshotCurrentSession();
+
   const id = Date.now().toString();
-  chatSessions.push({ id, label: label || `Chat ${chatSessions.length + 1}`, history: [] });
+  chatSessions.push({ id, label: label || `Chat ${chatSessions.length + 1}`, history: [], domHtml: '' });
   activeChatId = id;
   state.chatHistory = [];
   state.chatContextItems.clear();
@@ -2716,32 +2730,52 @@ function openNewChatSession(label) {
 }
 
 function switchChatSession(id) {
-  // Save current history
-  const current = chatSessions.find(s => s.id === activeChatId);
-  if (current) current.history = [...state.chatHistory];
+  if (id === activeChatId) return;
 
-  // Load new session
+  // Snapshot outgoing session
+  snapshotCurrentSession();
+
+  // Load incoming session
   const next = chatSessions.find(s => s.id === id);
   if (!next) return;
   activeChatId = id;
-  state.chatHistory = [...next.history];
+  state.chatHistory    = [...next.history];
   state.chatContextItems.clear();
   state.cssContextChars = null;
-  // Rebuild messages from history
-  document.getElementById('chatMessages').innerHTML = '';
-  for (const msg of state.chatHistory) {
-    appendChatMessage(msg.role, typeof msg.content === 'string' ? msg.content : '');
+
+  // Restore DOM snapshot — preserves all rendered markdown, token counts, etc.
+  const messagesEl = document.getElementById('chatMessages');
+  messagesEl.innerHTML = next.domHtml || '';
+  if (messagesEl.lastElementChild) {
+    messagesEl.lastElementChild.scrollIntoView({ block: 'end' });
   }
+
   renderChatContextBubbles();
   updateTokenCounter();
   renderChatTabs();
 }
 
 function closeChatSession(id) {
-  chatSessions = chatSessions.filter(s => s.id !== id);
-  if (!chatSessions.length) { openNewChatSession(); return; }
-  if (activeChatId === id) switchChatSession(chatSessions[chatSessions.length - 1].id);
-  else renderChatTabs();
+  const idx = chatSessions.findIndex(s => s.id === id);
+  chatSessions.splice(idx, 1);
+
+  if (!chatSessions.length) {
+    // All closed — clear the panel, reset state, wait for next open
+    activeChatId = null;
+    state.chatHistory = [];
+    state.chatContextItems.clear();
+    document.getElementById('chatMessages').innerHTML = '';
+    renderChatTabs();
+    return;
+  }
+
+  if (activeChatId === id) {
+    // Switch to the nearest remaining tab
+    const nextIdx = Math.min(idx, chatSessions.length - 1);
+    switchChatSession(chatSessions[nextIdx].id);
+  } else {
+    renderChatTabs();
+  }
 }
 
 function renderChatTabs() {
@@ -2863,11 +2897,11 @@ function submitAgentFlap() {
 }
 
 function submitAgentFlapRequest(instructions, agentCtxItems) {
-  // Open chat sidebar and create new session for this request
+  // Open chat sidebar (lazy-init first session if needed, then open a dedicated one)
   const sidebar = document.getElementById('chatSidebar');
   sidebar.classList.add('open');
   document.getElementById('toggleChat').classList.add('active');
-  openNewChatSession('✦ Changes');
+  openNewChatSession('✦ Changes');  // snapshots any existing session first
 
   // Show user message in chat
   appendChatMessage('user', instructions === '__reconsolidate__' ? 'Fully Reconsolidate CSS' : instructions);
