@@ -1131,6 +1131,21 @@ select.select-input option {
 .btn-secondary:hover { background: var(--bg-surface-hover); }
 .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.btn-text-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  opacity: 0.75;
+  transition: opacity 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.btn-text-link:hover { opacity: 1; background: var(--accent-subtle); }
+
 .btn-text-danger {
   background: none;
   border: none;

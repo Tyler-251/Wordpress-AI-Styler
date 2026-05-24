@@ -1059,6 +1059,17 @@ function setupSetupTab() {
     }
   });
 
+  // ── Get API Key links ──
+  document.getElementById('getClaudeKey').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://platform.claude.com/' });
+  });
+  document.getElementById('getDeepseekKey').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://platform.deepseek.com/' });
+  });
+  document.getElementById('getOpenaiKey').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://platform.openai.com/' });
+  });
+
   // ── Ollama: test connection ──
   document.getElementById('testOllama').addEventListener('click', async () => {
     const btn   = document.getElementById('testOllama');
