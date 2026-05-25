@@ -283,7 +283,7 @@ chrome.runtime.onConnect.addListener(port => {
 });
 
 async function generateCssStreaming(msg, port, signal) {
-  const { instructions, screenshotDataUrl, designRefDataUrl, history, stepScope, siteTabId } = msg;
+  const { instructions, screenshotDataUrl, designRefDataUrl, history, stepScope, siteTabId, skipDom = false } = msg;
   const settings = await getSettings();
 
   // Always read the live CSS from the Customizer — never use a cached value.
@@ -302,10 +302,14 @@ async function generateCssStreaming(msg, port, signal) {
   const cssMode  = isReconsolidate ? 'full' : (settings.cssMode || 'full');
   const systemPrompt = SYSTEM_PROMPTS[backend][cssMode];
 
-  // DOM snapshot — skip on revisions, model already has it from turn 1
+  // DOM snapshot — skip on revisions or when DOM was already sent earlier in this session
   let domSnapshot = null;
-  let domDebug = 'DOM: skipped (revision — using existing conversation context)';
-  if (!isRevision) {
+  let domDebug = isRevision
+    ? 'DOM: skipped (revision — using existing conversation context)'
+    : skipDom
+      ? 'DOM: skipped (already injected earlier in this session)'
+      : null;
+  if (!isRevision && !skipDom) {
     if (siteTabId) {
       try {
         const frame = await resolveContentFrame(siteTabId);
@@ -752,7 +756,7 @@ async function streamOllama(settings, messages, port, { systemPrompt = SYSTEM_PR
       method: 'POST',
       signal,
       headers: ollamaHeaders,
-      body: JSON.stringify({ model, messages: ollamaMessages, stream: true, options: { num_ctx: 32768 } }),
+      body: JSON.stringify({ model, messages: ollamaMessages, stream: true, options: { num_ctx: settings.ollamaCtxLen || 32768 } }),
     });
   } catch (e) {
     throw new Error(

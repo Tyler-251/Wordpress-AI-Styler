@@ -25,6 +25,21 @@ const OPENAI_MODELS = [
 
 
 
+// Ollama context-length slider — index maps to actual num_ctx value
+const OLLAMA_CTX_STEPS  = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+const OLLAMA_CTX_LABELS = ['4k',  '8k',  '16k',  '32k',  '64k',  '128k',   '256k'];
+
+function updateOllamaCtxDisplay() {
+  const slider = document.getElementById('ollamaCtxLen');
+  const display = document.getElementById('ollamaCtxDisplay');
+  if (!slider || !display) return;
+  const idx = parseInt(slider.value);
+  display.textContent = OLLAMA_CTX_LABELS[idx] ?? '32k';
+  // Update the CSS fill variable so the track colour follows the thumb
+  const pct = (idx / (OLLAMA_CTX_STEPS.length - 1)) * 100;
+  slider.style.setProperty('--fill', pct.toFixed(1) + '%');
+}
+
 const state = {
   screenshotDataUrl: null,
   screenshotTime: null,
@@ -273,7 +288,7 @@ function setupHelper() {
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleChatSend();
+      if (!activeChatPort) handleChatSend();
     }
   });
 
@@ -456,6 +471,24 @@ function appendChatMemo(text) {
   return el;
 }
 
+// Build a compact plaintext summary of chatHistory for cross-mode context injection.
+// Strips large injected CSS/DOM blobs from user messages (they appear before '\n---\n\n').
+function buildCrossModeSummary(history) {
+  if (!history || history.length === 0) return '';
+  return history.map(m => {
+    let content = typeof m.content === 'string'
+      ? m.content
+      : Array.isArray(m.content)
+        ? m.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+        : '';
+    // Strip context preamble injected by the backend (everything up to and including "---\n\n")
+    const sepIdx = content.indexOf('\n---\n\n');
+    if (m.role === 'user' && sepIdx !== -1) content = content.slice(sepIdx + 6);
+    if (content.length > 1200) content = content.slice(0, 1200) + '…';
+    return `${m.role === 'user' ? 'User' : 'Assistant'}: ${content.trim()}`;
+  }).join('\n\n');
+}
+
 function isConversationalMessage(text) {
   const t = text.trim().toLowerCase();
   if (t.endsWith('?')) return true;
@@ -470,20 +503,31 @@ function isConversationalMessage(text) {
 }
 
 async function handleChatSend() {
+  // If streaming, act as a stop button
+  if (activeChatPort) {
+    activeChatPort.disconnect();
+    setChatStreaming(false); // restore immediately; onDisconnect is async
+    return;
+  }
+
   const input = document.getElementById('chatInput');
   const text  = input.value.trim();
   if (!text) return;
 
+  // Re-enable auto-scroll for the new response
+  chatAutoScroll = true;
+
+  // Snapshot context BEFORE openNewChatSession — that call clears chatContextItems
+  const activeCtx = new Set(state.chatContextItems);
+
   // Create a session on the very first send if none exists yet
   if (chatSessions.length === 0) openNewChatSession();
 
-  const sendBtn = document.getElementById('chatSend');
   input.value = '';
   input.style.height = 'auto';
-  sendBtn.disabled = true;
+  setChatStreaming(true);
 
-  // Snapshot the active context items, then clear them
-  const activeCtx = new Set(state.chatContextItems);
+  // Clear the context items now that we've snapshotted them
   state.chatContextItems.clear();
   state.cssContextChars = null;
   updateChatMediaPreviews();
@@ -495,6 +539,7 @@ async function handleChatSend() {
   const assistantEl = appendChatMessage('assistant', '');
   assistantEl.classList.add('streaming');
   assistantEl.innerHTML = '<span class="chat-thinking">Thinking…</span>';
+  chatScrollToBottom(); // snap to bottom immediately on send so streaming is visible
 
   // ── Make Changes mode: route through GENERATE_CSS unless message is conversational ──
   const makeChanges = document.getElementById('makeChangesCheck')?.checked;
@@ -502,6 +547,7 @@ async function handleChatSend() {
     let agentPhase  = 'uploading';
     let agentBuffer = '';
     const port = chrome.runtime.connect({ name: 'generate' });
+    activeChatPort = port;
 
     port.onMessage.addListener(msg => {
       if (msg.type === 'CSS_CHUNK') {
@@ -509,7 +555,7 @@ async function handleChatSend() {
         if (agentPhase === 'uploading') agentPhase = 'thinking';
         if (agentPhase === 'thinking' && agentBuffer.includes('<css>')) agentPhase = 'generating';
         assistantEl.innerHTML = `<span class="chat-thinking">${agentPhase === 'generating' ? 'Generating' : 'Thinking'}… (${agentBuffer.length} chars)</span>`;
-        assistantEl.scrollIntoView({ block: 'end' });
+        chatScrollToBottom();
       } else if (msg.type === 'CSS_DONE') {
         assistantEl.classList.remove('streaming');
         assistantEl.innerHTML = renderChatMarkdown('CSS changes ready.');
@@ -520,9 +566,12 @@ async function handleChatSend() {
           usage.innerHTML = `<span class="tu-in">↑ ${fmtTokens(msg.inputTokens)}</span> · <span class="tu-out">↓ ${fmtTokens(msg.outputTokens)}</span>${fmtCostHtml(cost)}`;
           assistantEl.appendChild(usage);
         }
-        sendBtn.disabled = false;
+        setChatStreaming(false);
         state.chatHasCss = true;
         state.chatHasDom = true;
+        // Append to chatHistory so switching to Chat mode has full context
+        state.chatHistory.push({ role: 'user',      content: text });
+        state.chatHistory.push({ role: 'assistant', content: '[CSS changes generated based on this request.]' });
         updateTokenCounter();
         updateContextTagBadges();
         autoFillMakeChangesContext();
@@ -531,21 +580,29 @@ async function handleChatSend() {
       } else if (msg.type === 'CSS_ERROR') {
         assistantEl.classList.remove('streaming');
         assistantEl.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(msg.error)}</span>`;
-        sendBtn.disabled = false;
+        setChatStreaming(false);
       }
     });
 
     port.onDisconnect.addListener(() => {
       assistantEl.classList.remove('streaming');
-      sendBtn.disabled = false;
+      setChatStreaming(false);
     });
+
+    // Inject cross-mode chat context into the instructions so the model knows
+    // what was discussed before switching to Make Changes mode.
+    const priorSummary = buildCrossModeSummary(state.chatHistory);
+    const instructions = priorSummary
+      ? `Context from prior conversation:\n${priorSummary}\n\n---\n\nRequest: ${text}`
+      : text;
 
     port.postMessage({
       type: 'GENERATE_CSS',
-      instructions: text,
+      instructions,
       screenshotDataUrl: activeCtx.has('screenshot') ? state.screenshotDataUrl : null,
       designRefDataUrl:  activeCtx.has('designref')  ? state.designRefDataUrl  : null,
       history: [],
+      skipDom:  state.chatHasDom,  // DOM already in this session's history — skip re-injection
       siteTabId: state.siteTabId ?? null,
       stepScope: null,
     });
@@ -556,6 +613,7 @@ async function handleChatSend() {
   let buffer = '';
   let chatPhase = 'uploading'; // 'uploading' | 'thinking' | 'generating'
   const port = chrome.runtime.connect({ name: 'chat' });
+  activeChatPort = port;
 
   port.onMessage.addListener(msg => {
     if (msg.type === 'CHAT_CONTEXT_INJECTED') {
@@ -583,11 +641,11 @@ async function handleChatSend() {
           assistantEl.innerHTML = renderChatMarkdown(content);
         }
       }
-      assistantEl.scrollIntoView({ block: 'end' });
+      chatScrollToBottom();
     } else if (msg.type === 'CHAT_DONE') {
       assistantEl.classList.remove('streaming');
       state.chatHistory = msg.history;
-      sendBtn.disabled = false;
+      setChatStreaming(false);
       if (msg.inputTokens || msg.outputTokens) {
         const cost = calcCost(msg.inputTokens, msg.outputTokens);
         const usage = document.createElement('div');
@@ -600,13 +658,13 @@ async function handleChatSend() {
       assistantEl.textContent = `Error: ${msg.error}`;
       assistantEl.classList.remove('streaming');
       assistantEl.style.color = 'var(--danger)';
-      sendBtn.disabled = false;
+      setChatStreaming(false);
     }
   });
 
   port.onDisconnect.addListener(() => {
     assistantEl.classList.remove('streaming');
-    sendBtn.disabled = false;
+    setChatStreaming(false);
   });
 
   port.postMessage({
@@ -780,6 +838,35 @@ function renderChatMarkdown(text) {
     // Blank line — paragraph break
     if (line.trim() === '') { i++; continue; }
 
+    // Table — line starts with a pipe character
+    if (/^\s*\|/.test(line)) {
+      const tableLines = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      const isSepRow = l => /^[\|\s:\-]+$/.test(l);
+      const parseRow = l => l.replace(/^\s*\||\|\s*$/g, '').split('|').map(c => c.trim());
+      const sepIdx = tableLines.findIndex(isSepRow);
+      if (sepIdx >= 1) {
+        const headerRow = parseRow(tableLines[0]);
+        const dataRows  = tableLines.filter((l, idx) => idx !== 0 && !isSepRow(l));
+        let html = '<div class="chat-table-wrap"><table class="chat-table">';
+        html += '<thead><tr>' + headerRow.map(h => `<th>${inlineMarkdown(h)}</th>`).join('') + '</tr></thead>';
+        if (dataRows.length) {
+          html += '<tbody>' + dataRows.map(r =>
+            '<tr>' + parseRow(r).map(c => `<td>${inlineMarkdown(c)}</td>`).join('') + '</tr>'
+          ).join('') + '</tbody>';
+        }
+        html += '</table></div>';
+        out.push(html);
+      } else {
+        // Not a proper table yet (streaming) — render as plain text
+        out.push(`<p class="chat-p">${tableLines.map(l => inlineMarkdown(l)).join('<br>')}</p>`);
+      }
+      continue;
+    }
+
     // Paragraph: collect contiguous non-special lines
     const paraLines = [];
     while (i < lines.length) {
@@ -791,6 +878,7 @@ function renderChatMarkdown(text) {
       if (/^>\s?/.test(l))            break;
       if (/^[-*+]\s/.test(l))         break;
       if (/^\d+\.\s/.test(l))         break;
+      if (/^\s*\|/.test(l))           break;
       paraLines.push(inlineMarkdown(l));
       i++;
     }
@@ -877,6 +965,7 @@ async function doSaveSettings() {
     ollamaUrl:        document.getElementById('ollamaUrl').value.trim() || 'http://localhost:11434',
     ollamaModel:      document.getElementById('ollamaModel').value.trim() || 'llama3',
     ollamaVisionModel: document.getElementById('ollamaVisionModel').value.trim() || 'llava',
+    ollamaCtxLen:     OLLAMA_CTX_STEPS[parseInt(document.getElementById('ollamaCtxLen')?.value ?? 3)] ?? 32768,
     cfEnabled,
     cfClientId:       cfEnabled ? document.getElementById('cfClientId').value.trim()   : '',
     cfClientSecret:   cfEnabled ? document.getElementById('cfClientSecret').value.trim() : '',
@@ -1063,6 +1152,8 @@ function renderBackups(backups) {
       try {
         await send({ type: 'RESTORE_BACKUP', index });
         lastRestoredTimestamp = entry.timestamp;
+        // Reload the CSS editor so Publish uses the restored CSS, not the pre-restore content
+        await loadCssIde();
         await loadBackups();
         setTimeout(() => {
           if (lastRestoredTimestamp === entry.timestamp) {
@@ -1104,6 +1195,9 @@ function applySettingsToForm(s) {
   document.getElementById('ollamaUrl').value         = s.ollamaUrl || 'http://localhost:11434';
   document.getElementById('ollamaModel').value       = s.ollamaModel || 'llama3';
   document.getElementById('ollamaVisionModel').value = s.ollamaVisionModel || 'llava';
+  const ctxIdx = OLLAMA_CTX_STEPS.indexOf(s.ollamaCtxLen ?? 32768);
+  document.getElementById('ollamaCtxLen').value = ctxIdx >= 0 ? ctxIdx : 3;
+  updateOllamaCtxDisplay();
   document.getElementById('cfClientId').value        = s.cfClientId || '';
   document.getElementById('cfClientSecret').value    = s.cfClientSecret || '';
   const lineWrap = s.cssLineWrap !== false; // default true
@@ -1301,6 +1395,9 @@ function setupSetupTab() {
   document.getElementById('getOpenaiKey').addEventListener('click', () => {
     chrome.tabs.create({ url: 'https://platform.openai.com/' });
   });
+
+  // ── Ollama: context length slider live update ──
+  document.getElementById('ollamaCtxLen')?.addEventListener('input', updateOllamaCtxDisplay);
 
   // ── Ollama: test connection ──
   document.getElementById('testOllama').addEventListener('click', async () => {
@@ -2215,7 +2312,8 @@ function updateCssIdeMeta() {
 function setCssIdeStatus(msg, isError) {
   const el = document.getElementById('cssIdeStatus');
   el.textContent = msg;
-  el.classList.toggle('css-ide-status-error', !!isError);
+  el.classList.toggle('css-ide-status-error',     !!isError);
+  el.classList.toggle('css-ide-status-published',  msg === 'Published ✓');
 }
 
 // ── Color swatches ────────────────────────────────────────────────────────────
@@ -2661,7 +2759,7 @@ function submitInlineChat(instruction) {
   el.innerHTML = `
     <div class="css-inline-chat-row css-inline-chat-streaming-row">
       <span class="css-inline-chat-icon css-inline-chat-icon-spin">✦</span>
-      <span class="css-inline-chat-label">Uploading…</span>
+      <span class="css-inline-chat-label">Thinking…</span>
       <button class="css-inline-chat-dismiss" title="Stop">
         <svg viewBox="0 0 10 10" fill="none" width="10" height="10">
           <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -2672,9 +2770,9 @@ function submitInlineChat(instruction) {
   el.querySelector('.css-inline-chat-dismiss').addEventListener('click', closeInlineChat);
   cssInlineChat.lineWidget.changed();
 
-  // Track which phase we're in: uploading → thinking → generating
+  // Track which phase we're in: thinking → generating
   // "generating" kicks in once we see a CSS brace in the stream buffer
-  let inlinePhase = 'uploading';
+  let inlinePhase = 'thinking';
 
   const port = chrome.runtime.connect({ name: 'css-inline-rewrite' });
   cssInlineChat.port = port;
@@ -2683,10 +2781,7 @@ function submitInlineChat(instruction) {
     if (msg.type === 'INLINE_CHUNK') {
       buffer += msg.text;
 
-      // Advance phase: uploading → thinking on first chunk, thinking → generating on first '{'
-      if (inlinePhase === 'uploading') {
-        inlinePhase = 'thinking';
-      }
+      // Advance phase: thinking → generating on first '{'
       if (inlinePhase === 'thinking' && buffer.includes('{')) {
         inlinePhase = 'generating';
       }
@@ -2924,7 +3019,7 @@ function setupChatSidebar() {
   });
 
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!activeChatPort) handleChatSend(); }
   });
   sendBtn.addEventListener('click', handleChatSend);
 
@@ -3214,6 +3309,13 @@ function setupAgentFlap() {
     flap.classList.toggle('open');
   });
 
+  // ── Chat scroll: unlock auto-scroll when user scrolls up, re-lock at bottom ──
+  document.getElementById('chatMessages').addEventListener('scroll', () => {
+    const el = document.getElementById('chatMessages');
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+    chatAutoScroll = atBottom;
+  }, { passive: true });
+
   // ── Drag-to-resize ─────────────────────────────────────────────────────────
   let _dragStartY = 0, _dragStartH = 0;
 
@@ -3248,7 +3350,22 @@ function setupAgentFlap() {
 
   const mcCheck = document.getElementById('makeChangesCheck');
   if (mcCheck) {
+    // Sync pill segments to match checkbox state
+    const syncModePill = () => {
+      document.getElementById('modeChangesBtn')?.classList.toggle('active',  mcCheck.checked);
+      document.getElementById('modeChatBtn')?.classList.toggle('active',     !mcCheck.checked);
+    };
+
+    // Pill buttons drive the hidden checkbox
+    document.getElementById('modeChangesBtn')?.addEventListener('click', () => {
+      if (!mcCheck.checked) { mcCheck.checked = true; mcCheck.dispatchEvent(new Event('change')); }
+    });
+    document.getElementById('modeChatBtn')?.addEventListener('click', () => {
+      if (mcCheck.checked) { mcCheck.checked = false; mcCheck.dispatchEvent(new Event('change')); }
+    });
+
     mcCheck.addEventListener('change', () => {
+      syncModePill();
       updateSbModeVisibility();
       updateChatPlaceholder();
       const chatMessages = document.getElementById('chatMessages');
@@ -3352,6 +3469,7 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
 
   // Show user message in chat
   if (modeSeparator) modeSeparator.sentAfter = true;
+  chatAutoScroll = true;
   appendChatMessage('user', instructions === '__reconsolidate__' ? 'Fully Reconsolidate CSS' : instructions);
 
   setAgentFlapLoading(true);
@@ -3360,18 +3478,19 @@ function submitAgentFlapRequest(instructions, agentCtxItems) {
   const assistantEl = appendChatMessage('assistant', '');
   assistantEl.classList.add('streaming');
   assistantEl.innerHTML = '<span class="chat-thinking">Thinking…</span>';
+  chatScrollToBottom();
 
   let agentBuffer = '';
-  let agentPhase  = 'uploading';
+  let agentPhase  = 'thinking';
   const port = chrome.runtime.connect({ name: 'generate' });
   state.generatePort = port;
 
   port.onMessage.addListener(msg => {
     if (msg.type === 'CSS_CHUNK') {
       agentBuffer += msg.text;
-      if (agentPhase === 'uploading') agentPhase = 'thinking';
       if (agentPhase === 'thinking' && agentBuffer.includes('<css>')) agentPhase = 'generating';
       assistantEl.innerHTML = `<span class="chat-thinking">${agentPhase === 'generating' ? 'Generating' : 'Thinking'}… (${agentBuffer.length} chars)</span>`;
+      chatScrollToBottom();
     } else if (msg.type === 'CSS_DONE') {
       assistantEl.classList.remove('streaming');
       const newCss = msg.css || '';
@@ -3422,14 +3541,35 @@ function setAgentFlapLoading(loading) {
 // ─── Diff Mode ────────────────────────────────────────────────────────────────
 
 let diffHunks = []; // [{ id, oldMark, newMark, widget, chatNode, status: 'pending'|'approved'|'rejected' }]
+let diffOriginalCss = null; // clean CSS before the diff was applied (set at enterDiffMode time)
 
 // Tracks the most recent mode-switch separator so it can be removed if no message is sent
 let modeSeparator = null; // { node: HTMLElement, sentAfter: boolean }
+
+// Auto-scroll: true = follow the stream; false = user scrolled up, stop chasing
+let chatAutoScroll = true;
+
+// Active streaming port — non-null while a chat/generate request is in flight
+let activeChatPort = null;
+
+function setChatStreaming(on) {
+  const btn = document.getElementById('chatSend');
+  if (!btn) return;
+  btn.classList.toggle('chat-send-stop', on);
+  if (!on) activeChatPort = null;
+}
+
+function chatScrollToBottom() {
+  if (!chatAutoScroll) return;
+  const el = document.getElementById('chatMessages');
+  if (el) el.scrollTop = el.scrollHeight;
+}
 
 function enterDiffMode(newCss, originalCss, unified = false) {
   if (!cssIdeEditor) return;
 
   const currentCss = originalCss || cssIdeEditor.getValue();
+  diffOriginalCss = currentCss; // snapshot clean pre-diff CSS for Undo
   exitDiffMode();
 
   const diff = computeLineDiff(currentCss.trim(), newCss.trim());
@@ -3478,8 +3618,14 @@ function enterDiffMode(newCss, originalCss, unified = false) {
       };
 
       const widgetEl   = buildHunkWidget(id, hunkData);
-      const lineWidget = cssIdeEditor.addLineWidget(hunkEnd, widgetEl, {
-        above: false, handleMouseEvents: true, noHScroll: true,
+      // Attach to the line AFTER the hunk (above:true) so the widget sits in
+      // its own clean row and doesn't inherit the highlighted line's background.
+      // Fall back to the hunk's last line only if there's no following line.
+      const totalLines1 = cssIdeEditor.lineCount();
+      const wHostLine1  = hunkEnd + 1 < totalLines1 ? hunkEnd + 1 : hunkEnd;
+      const wAbove1     = hunkEnd + 1 < totalLines1;
+      const lineWidget  = cssIdeEditor.addLineWidget(wHostLine1, widgetEl, {
+        above: wAbove1, handleMouseEvents: true, noHScroll: true,
       });
 
       const chatNode = buildChatDiffNode(id, hunkData);
@@ -3518,8 +3664,11 @@ function enterDiffMode(newCss, originalCss, unified = false) {
 
     const uid        = 'hunk-0';
     const wEl        = buildHunkWidget(uid, mergedData);
-    const wLine      = cssIdeEditor.addLineWidget(endLine, wEl, {
-      above: false, handleMouseEvents: true, noHScroll: true,
+    const totalLinesU = cssIdeEditor.lineCount();
+    const wHostLineU  = endLine + 1 < totalLinesU ? endLine + 1 : endLine;
+    const wAboveU     = endLine + 1 < totalLinesU;
+    const wLine       = cssIdeEditor.addLineWidget(wHostLineU, wEl, {
+      above: wAboveU, handleMouseEvents: true, noHScroll: true,
     });
     const cNode = buildChatDiffNode(uid, mergedData);
     document.getElementById('chatMessages').appendChild(cNode);
@@ -3530,6 +3679,12 @@ function enterDiffMode(newCss, originalCss, unified = false) {
       removeLines: allRemoveLines, addLines: allAddLines,
     }];
   }
+
+  // Mark the outer boundary lines of every hunk so CSS can draw bright top/bottom borders
+  diffHunks.forEach(h => {
+    cssIdeEditor.addLineClass(h.startLine, 'background', 'cm-diff-hunk-top');
+    cssIdeEditor.addLineClass(h.endLine,   'background', 'cm-diff-hunk-bottom');
+  });
 
   // Auto-scroll to the first diff hunk (same as clicking "Scroll to next")
   if (diffHunks.length > 0) {
@@ -3546,10 +3701,13 @@ function enterDiffMode(newCss, originalCss, unified = false) {
 function exitDiffMode() {
   diffHunks.forEach(h => {
     try { h.lineWidget.clear(); } catch (_) {}
-    if (h.chatNode && h.chatNode.parentNode) h.chatNode.remove();
+    // Only remove unresolved (pending) nodes — resolved ones stay in chat with Undo button
+    if (h.status === 'pending' && h.chatNode && h.chatNode.parentNode) h.chatNode.remove();
     for (let ln = h.startLine; ln <= h.endLine; ln++) {
       try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-add-bg'); } catch (_) {}
       try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-remove-bg'); } catch (_) {}
+      try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-hunk-top'); } catch (_) {}
+      try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-hunk-bottom'); } catch (_) {}
     }
   });
   diffHunks = [];
@@ -3640,6 +3798,13 @@ function resolveHunk(id, resolution) {
 
   hunk.status = resolution;
 
+  // Undo target = the clean CSS BEFORE this hunk's mutations.
+  // For hunk 0 that's the pre-diff original; for later hunks it's the snapshot
+  // captured right after the previous hunk was resolved.
+  const cssUndoTarget = hunkIdx === 0
+    ? (diffOriginalCss || cssIdeEditor.getValue())
+    : (diffHunks[hunkIdx - 1].cssAfterResolve || diffOriginalCss || cssIdeEditor.getValue());
+
   // Accept → delete the red (removed) lines, keep the green (added) lines.
   // Reject → delete the green (added) lines, keep the red (removed) lines.
   const linesToDelete = resolution === 'approved' ? hunk.removeLines : hunk.addLines;
@@ -3649,6 +3814,8 @@ function resolveHunk(id, resolution) {
   linesToKeep.forEach(ln => {
     try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-add-bg'); } catch (_) {}
     try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-remove-bg'); } catch (_) {}
+    try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-hunk-top'); } catch (_) {}
+    try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-hunk-bottom'); } catch (_) {}
   });
 
   // Delete unwanted lines bottom-to-top so earlier positions stay valid
@@ -3684,11 +3851,49 @@ function resolveHunk(id, resolution) {
   // Remove hunk widget
   try { hunk.lineWidget.clear(); } catch (_) {}
 
-  // Update chat node
+  // Capture clean CSS after this hunk's mutations for the Redo path
+  const cssAfterResolve = cssIdeEditor.getValue();
+  hunk.cssAfterResolve = cssAfterResolve;
+  hunk.cssUndoTarget   = cssUndoTarget;
+
+  // Approximate line range for scroll+flash after undo/redo
+  const undoFlashStart = hunk.hunk.newStart;
+  const undoFlashCount = Math.max(hunk.hunk.removed.length, 1);
+  const redoFlashStart = hunk.hunk.newStart;
+  const redoFlashCount = Math.max(hunk.hunk.added.length, 1);
+
+  // Update chat node — replace pending buttons with status badge + Undo / Redo
   if (hunk.chatNode) {
     hunk.chatNode.classList.add('resolved', resolution === 'approved' ? 'resolved-approve' : 'resolved-reject');
     const actions = hunk.chatNode.querySelector('.chat-diff-node-actions');
-    if (actions) actions.innerHTML = `<span style="font-size:11px;color:var(--text-secondary);padding:4px 8px;">${resolution === 'approved' ? '✓ Accepted' : '✕ Rejected'}</span>`;
+    if (actions) {
+      const statusText  = resolution === 'approved' ? '✓ Accepted' : '✕ Rejected';
+      const statusClass = resolution === 'approved' ? 'diff-node-status-accept' : 'diff-node-status-reject';
+
+      function showResolved() {
+        actions.innerHTML = `<span class="chat-diff-node-status ${statusClass}">${statusText}</span><button class="chat-diff-node-undo">↩ Undo</button>`;
+        actions.querySelector('.chat-diff-node-undo').addEventListener('click', handleUndo);
+      }
+
+      function handleUndo() {
+        cssIdeEditor.setValue(hunk.cssUndoTarget);
+        flashEditorRegion(undoFlashStart, undoFlashCount);
+        hunk.status = 'pending';
+        hunk.chatNode.classList.remove('resolved', 'resolved-approve', 'resolved-reject');
+        actions.innerHTML = `<span class="chat-diff-node-status diff-node-status-undone">↩ Undone</span><button class="chat-diff-node-undo">↷ Redo</button>`;
+        actions.querySelector('.chat-diff-node-undo').addEventListener('click', handleRedo);
+      }
+
+      function handleRedo() {
+        cssIdeEditor.setValue(hunk.cssAfterResolve);
+        flashEditorRegion(redoFlashStart, redoFlashCount);
+        hunk.status = resolution;
+        hunk.chatNode.classList.add('resolved', resolution === 'approved' ? 'resolved-approve' : 'resolved-reject');
+        showResolved();
+      }
+
+      showResolved();
+    }
   }
 
   updateDiffModeBar();
@@ -3704,6 +3909,22 @@ function resolveHunk(id, resolution) {
   } else {
     scrollToNextPendingHunk(hunkIdx);
   }
+}
+
+function flashEditorRegion(fromLine, count) {
+  if (!cssIdeEditor) return;
+  const total = cssIdeEditor.lineCount();
+  const start = Math.min(Math.max(0, fromLine), total - 1);
+  const end   = Math.min(start + Math.max(count, 1) - 1, total - 1);
+  cssIdeEditor.scrollIntoView({ line: start, ch: 0 }, 80);
+  for (let ln = start; ln <= end; ln++) {
+    cssIdeEditor.addLineClass(ln, 'background', 'cm-diff-flash');
+  }
+  setTimeout(() => {
+    for (let ln = start; ln <= end; ln++) {
+      try { cssIdeEditor.removeLineClass(ln, 'background', 'cm-diff-flash'); } catch (_) {}
+    }
+  }, 1500);
 }
 
 function scrollToNextPendingHunk(fromIdx) {
