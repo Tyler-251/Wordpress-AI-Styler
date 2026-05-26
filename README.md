@@ -94,7 +94,7 @@ Click `+` in the chat input row to attach context to your next message:
 |---------|--------------|
 | **All Page CSS** | Your full stylesheet + live DOM snapshot |
 | **CSS** | Stylesheet only |
-| **DOM** | Live DOM snapshot (includes classes, IDs, `data-*` and custom attributes like `swetiplanname`) |
+| **DOM** | Live DOM snapshot (includes classes, IDs, `data-*` and custom attributes) |
 | **Take Screenshot** | Screenshot of the current page (shown as a thumbnail) |
 | **Design Ref** | A reference image uploaded in Config (shown as a thumbnail) |
 
